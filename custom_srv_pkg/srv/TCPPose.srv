@@ -1,0 +1,4 @@
+geometry_msgs/Pose target_pose  # Request: Target TCP pose
+---
+bool success                        # Response: Success status
+string message                      # Response: Message
