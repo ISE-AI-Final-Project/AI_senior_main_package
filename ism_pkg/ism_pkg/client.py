@@ -47,11 +47,13 @@ class ImageClient(Node):
         future.add_done_callback(self.response_callback)
 
     def response_callback(self, future):
+        print("im back")
         try:
             response = future.result()
             received_img = self.bridge.imgmsg_to_cv2(response.mask, desired_encoding='bgr8')
             cv2.imshow('Received Image', received_img)
             cv2.waitKey(0)
+            print("im back2")
         except Exception as e:
             self.get_logger().error(f'Failed to receive response: {str(e)}')
 

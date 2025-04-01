@@ -4,12 +4,13 @@ from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
+from custom_srv_pkg.srv import GraspPoseSend
+from custom_srv_pkg.msg import GraspPose, GraspPoses
 from sensor_msgs.msg import PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import String
 from std_msgs.msg import Header
 from tf2_ros import Buffer, TransformException, TransformListener
-
 from . import utils
 
 
@@ -18,6 +19,12 @@ class MainNode(Node):
         super().__init__("main")
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # CLIENT ########################################
+        self.client = self.create_client(GraspPoseSend, 'GraspPose')
+        while not self.client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for service...')
+        self.get_logger().info('Service is available. Sending request...')
 
         # PARAM #########################################
         param_descriptor = ParameterDescriptor(
@@ -88,6 +95,9 @@ class MainNode(Node):
 
         elif recv_command == "make_collision":
             self.command_make_collision()
+
+        elif recv_command == "srv_all_grasp":
+            self.command_srv_all_grasp()
 
     def pointcloud_callback(self, msg: PointCloud2):
         """
@@ -164,6 +174,50 @@ class MainNode(Node):
             self.pub_collision.publish(collision_object)
         self.log(f"Published CollisionObject")
 
+    # def send_request_grasppose(self, target_obj):
+    #     request = GraspPoseSend.Request()
+    #     request.target_obj = target_obj
+
+    #     future = self.client.call_async(request)
+    #     rclpy.spin_until_future_complete(self, future)
+    #     return future.result()
+        
+
+    def command_srv_all_grasp(self):
+        # TODO
+        # as a client
+        self.log("I need mumu.")
+        # target_obj_msg = String()
+        # target_obj_msg.data = self.get_parameter("target_obj").get_parameter_value().string_value
+
+        request = GraspPoseSend.Request()
+        request.target_obj = self.get_parameter("target_obj").get_parameter_value().string_value
+        self.log("I need mumu2.")
+
+        # Ensure client is connected before calling
+        if not self.client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("Service not available!")
+            return
+
+        future = self.client.call_async(request)
+        future.add_done_callback(self.response_callback)
+        # rclpy.spin_until_future_complete(self, future)
+        # if future.result() is not None:
+        #     response = future.result()
+        #     self.get_logger().info(f"Received {len(response.grasp_poses.grasp_poses)} grasp pose(s).")
+        # else:
+        #     self.get_logger().error("Failed to receive response.")
+        # self.log("I need mumu3.")
+
+    def response_callback(self, future):
+        print("im back")
+        try:
+            response = future.result()
+            self.get_logger().info(f"Received response: {response}")
+            num_poses = len(response.grasp_poses.grasp_poses)
+            self.get_logger().info(f"Received {num_poses} grasp pose(s).")
+        except Exception as e:
+            self.get_logger().error(f'Failed to receive response: {str(e)}')
 
 def main(args=None):
     rclpy.init(args=args)

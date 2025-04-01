@@ -1,28 +1,40 @@
 import rclpy
 from rclpy.node import Node
-from custom_srv_pkg.srv import PESend
+from custom_srv_pkg.srv import GraspPoseSend
+from custom_srv_pkg.msg import GraspPose, GraspPoses
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Pose
 
 class AllGraspServer(Node):
     def __init__(self):
         super().__init__('all_grasp_service')
-        self.srv = self.create_service(PESend, 'process_pose', self.handle_request)
-        self.get_logger().info("All Grasp Server is ready.")
+        self.srv = self.create_service(GraspPoseSend, 'GraspPose', self.handle_grasp_pose_request)
+        self.get_logger().info('Grasp Pose Server is ready.')
 
-    def handle_request(self, request, response):
-        self.get_logger().info("Received target object.")
+    def handle_grasp_pose_request(self, request, response):
+        self.get_logger().info(f'Received request for: {request.target_obj}')
 
-        # Simulate pose estimation
-        response.pose.position.x = 2.3
-        response.pose.position.y = 2.4
-        response.pose.position.z = 2.5
-        response.pose.orientation.x = 4.0
-        response.pose.orientation.y = 5.0
-        response.pose.orientation.z = 6.0
-        response.pose.orientation.w = 1.0
+        # Create the response message
+        grasp_poses_msg = GraspPoses()
 
-        self.get_logger().info("Sending 6d pose (all grasp).")
+        grasp_pose1 = GraspPose()
+        grasp_pose1.ht_in_meter = Pose()
+        grasp_pose1.d_to_com = 0.05
+        grasp_pose1.gripper_score = 0.9
+
+        grasp_pose2 = GraspPose()
+        grasp_pose2.ht_in_meter = Pose()
+        grasp_pose2.d_to_com = 0.05
+        grasp_pose2.gripper_score = 0.9
+
+        grasp_poses_msg.grasp_poses.append(grasp_pose1)
+        grasp_poses_msg.grasp_poses.append(grasp_pose2)
+
+        response.grasp_poses = grasp_poses_msg  # Assign to response
+
+        self.get_logger().info('Sending.')
+        print(grasp_poses_msg)
+
         return response
 
 def main():
