@@ -15,6 +15,9 @@ find_package(rosidl_default_generators REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/GraspPose.msg"
+  "msg/GraspPoses.msg"
+  "msg/InputOutput.msg"
   "srv/IMGSend.srv"
   "srv/PESend.srv"
   "srv/TCPPose.srv"
