@@ -21,6 +21,7 @@ setup(
         "console_scripts": [
             "main = main_pkg.main:main",
             "socket_client_example = main_pkg.socket_client_example:main",
+            "socket_client_pe = main_pkg.socket_client_pe:main"
         ],
     },
 )
