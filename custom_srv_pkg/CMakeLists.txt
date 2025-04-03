@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/TCPPose.srv"
   "srv/Gripper.srv"
   "srv/PointCloudSend.srv"
+  "srv/BestGraspPose.srv"
   DEPENDENCIES sensor_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
   DEPENDENCIES geometry_msgs 
 )

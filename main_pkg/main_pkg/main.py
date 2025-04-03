@@ -23,43 +23,13 @@ class MainNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # CLIENT: ALL_GRASP ########################################
-        self.grasp_client = self.create_client(GraspPoseSend, 'GraspPose')
-        while not self.grasp_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for service...')
-        self.get_logger().info('Service "ALL_GRASP" is available. Sending request...')
-
-        # CLIENT: COLLISION ########################################
-        self.collision_client = self.create_client(PointCloudSend, 'CollisionMaker')
-        while not self.collision_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for service...')
-        self.get_logger().info('Service "CollisionMaker" is available. Sending request...')
-
-        # CLIENT: ISM ########################################
-        self.ism_client = self.create_client(IMGSend, 'image_service')
-        while not self.ism_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for service...')
-
         # PARAM #########################################
         param_descriptor = ParameterDescriptor(
             name="target_obj",
             type=ParameterType.PARAMETER_STRING,
             description="A sample parameter",
         )
-        self.declare_parameter(
-            "target_obj", "obj_10", descriptor=param_descriptor
-        )
-
-        # Set a new value for the parameter
-        # new_value = "mumu"
-        # self.set_parameters(
-        #     [
-        #         rclpy.parameter.Parameter(
-        #             "target_obj", rclpy.Parameter.Type.STRING, new_value
-        #         )
-        #     ]
-        # )
-        # self.get_logger().info(f"'target_obj' set to: {new_value}")
+        self.declare_parameter("target_obj", "obj_10", descriptor=param_descriptor)
 
         # SUBSCRIBER ################################################
         self.sub_command = self.create_subscription(
@@ -73,9 +43,7 @@ class MainNode(Node):
         )
 
         # PUBLISHER ######################################
-        self.pub_rviz_text = self.create_publisher(
-            String, "/main/rviz_text", 10
-        )
+        self.pub_rviz_text = self.create_publisher(String, "/main/rviz_text", 10)
 
         self.pub_current_pointcloud = self.create_publisher(
             PointCloud2, "/main/current_pointcloud", 10
@@ -85,6 +53,16 @@ class MainNode(Node):
             CollisionObject, "collision_object_topic", 10
         )
 
+        # CLIENT ########################################
+        self.client_all_grasp = self.create_client(GraspPoseSend, "GraspPose")
+
+        self.client_make_collision = self.create_client(
+            PointCloudSend, "CollisionMaker"
+        )
+
+        self.client_ism = self.create_client(IMGSend, "image_service")
+
+        # VARIABLE ######################################
         self.data_pointcloud = None  # Only stores one when captured
         self.data_pointcloud_xyz = None
         self.capture_pointcloud = False
@@ -92,6 +70,9 @@ class MainNode(Node):
         self.log("Main Node is Running. Ready for command.")
 
     def log(self, text):
+        """
+        Log Text into Terminal and RViz label
+        """
         # Log in terminal
         self.get_logger().info(text)
         # Pub to RViz
@@ -99,22 +80,36 @@ class MainNode(Node):
         string_msg.data = text
         self.pub_rviz_text.publish(string_msg)
 
-
     def command_callback(self, msg: String):
+        """
+        RViz command callback
+        """
         recv_command = msg.data.strip().lower()
         self.get_logger().info(f"Received command: {recv_command}")
 
         if recv_command == "capture":
             self.command_capture()
 
-        elif recv_command == "make_collision":
-            self.command_make_collision()
+        elif recv_command == "req_ism":
+            self.command_srv_req_ism()
 
-        elif recv_command == "srv_all_grasp":
+        elif recv_command == "req_pem":
+            self.command_srv_req_pem()
+
+        elif recv_command == "generate_all_grasp":
             self.command_srv_all_grasp()
 
-        # elif recv_command == "srv_all_grasp":
-        #     self.command_srv_all_grasp()
+        elif recv_command == "generate_best_grasp":
+            self.command_srv_best_grasp()
+
+        elif recv_command == "make_collision":
+            self.command_srv_make_collision()
+
+        elif recv_command == "gripper_open":
+            self.command_gripper_open()
+
+        elif recv_command == "gripper_close":
+            self.command_gripper_close()
 
     def pointcloud_callback(self, msg: PointCloud2):
         """
@@ -191,19 +186,31 @@ class MainNode(Node):
             self.pub_collision.publish(collision_object)
         self.log(f"Published CollisionObject")
 
+    ## CLIENT: ISM ########################################
+    def command_srv_req_ism(self):
+        if not self.client_ism.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("Service ISM not available!")
+            return
+        self.log("TODO: REQ ISM")
+
+    ## CLIENT: PEM ########################################
+    def command_srv_req_pem(self):
+        self.log("TODO: REQ PEM")
 
     ## CLIENT: ALL_GRASP ########################################
     def command_srv_all_grasp(self):
+        if not self.client_all_grasp.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("Service All Grasp not available!")
+            return
+
         self.log("I need mumu.")
         request = GraspPoseSend.Request()
-        request.target_obj = self.get_parameter("target_obj").get_parameter_value().string_value
+        request.target_obj = (
+            self.get_parameter("target_obj").get_parameter_value().string_value
+        )
         self.log("I need mumu2.")
 
-        # Ensure client is connected before calling
-        if not self.grasp_client.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service not available!")
-            return
-        future = self.grasp_client.call_async(request)
+        future = self.client_all_grasp.call_async(request)
         future.add_done_callback(self.command_srv_all_grasp_response_callback)
 
     def command_srv_all_grasp_response_callback(self, future):
@@ -214,55 +221,31 @@ class MainNode(Node):
             num_poses = len(response.grasp_poses.grasp_poses)
             self.get_logger().info(f"Received {num_poses} grasp pose(s).")
         except Exception as e:
-            self.get_logger().error(f'Failed to receive response: {str(e)}')
+            self.get_logger().error(f"Failed to receive response: {str(e)}")
 
+    ## CLIENT: BEST_GRASP########################################
+    def command_srv_best_grasp(self):
+        self.log("TODO: BEST GRASP")
 
-    ## CLIENT: COLLISION ########################################
-    
+    ## CLIENT: MAKE COLLISION ########################################
+    def command_srv_make_collision(self):
+        # Currently Non service
+        self.command_make_collision()
 
+        # TODO: To service
+        # if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
+        #     self.get_logger().error("Service Make Collision not available!")
+        #     return
+        # self.log("TODO: MAKE COLLISION")
 
+    ## CLIENT: GRIPPER OPEN ########################################
+    def command_gripper_open(self):
+        self.log("TODO: GRIPPER OPEN")
 
+    ## CLIENT: GRIPPER CLOSE ########################################
+    def command_gripper_close(self):
+        self.log("TODO: GRIPPER CLOSE")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # ## CLIENT: ISM ########################################
-    # def send_request(self):
-    #     img1 = cv2.imread('/home/icynunnymumu/Desktop/b.jpg')
-    #     img2 = cv2.imread('/home/icynunnymumu/Desktop/a.jpg')
-
-    #     if img1 is None or img2 is None:
-    #         self.get_logger().error('Failed to load images. Check file paths.')
-    #         return
-
-    #     request = IMGSend.Request()
-    #     request.rgb = self.bridge.cv2_to_imgmsg(img1, encoding='bgr8')
-    #     request.depth = self.bridge.cv2_to_imgmsg(img2, encoding='bgr8')
-
-    #     future = self.ism_client.call_async(request)
-    #     future.add_done_callback(self.response_callback)
-
-    # def response_callback(self, future):
-    #     # print("im back")
-    #     try:
-    #         response = future.result()
-    #         received_img = self.bridge.imgmsg_to_cv2(response.mask, desired_encoding='bgr8')
-    #         cv2.imshow('Received Image', received_img)
-    #         cv2.waitKey(0)
-    #         # print("im back2")
-    #     except Exception as e:
-    #         self.get_logger().error(f'Failed to receive response: {str(e)}')
 
 def main(args=None):
     rclpy.init(args=args)
