@@ -19,9 +19,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "main = main_pkg.main:main",  # Runs ParamWriterNode
-            "reader = main_pkg.reader:main",
-            "socket_client = main_pkg.socket_client:main",
+            "main = main_pkg.main:main",
+            "socket_client_example = main_pkg.socket_client_example:main",
         ],
     },
 )
