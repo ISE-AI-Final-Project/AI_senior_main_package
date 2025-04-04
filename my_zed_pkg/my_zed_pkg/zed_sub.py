@@ -13,8 +13,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from custom_srv_pkg.srv import GraspPoseSend, IMGSend, PointCloudSend
-
-from .utils import utils
+from main_pkg.utils import utils
 
 
 class ZedSubNode(Node):
@@ -22,17 +21,50 @@ class ZedSubNode(Node):
         super().__init__("zed_sub_node")
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.bridge = CvBridge()
+        # VARIABLE ######################################
+        self.data_pointcloud = None
+        self.data_pointcloud_xyz = None
+        self.capture_pointcloud = False
+
+        self.data_rgb = None
+        self.capture_rgb = True
+
+        self.data_depth = None
+        self.capture_depth = True
+
 
         # SUBSCRIBER ################################################
         self.sub_command = self.create_subscription(
             String, "/main/main_command", self.command_callback, 10
         )
-        self.sub_pointcloud = self.create_subscription(
+        self.sub_zed_pointcloud = self.create_subscription(
             PointCloud2,
             "/zed/zed_node/point_cloud/cloud_registered",
-            self.pointcloud_callback,
+            self.zed_pointcloud_callback,
             10,
         )
+
+        self.sub_zed_rgb = self.create_subscription(
+            Image,
+            "/zed/zed_node/left/image_rect_color",
+            self.zed_rgb_callback,
+            10,
+        )
+
+        self.sub_zed_depth = self.create_subscription(
+            Image,
+            "/zed/zed_node/depth/depth_registered",
+            self.zed_depth_callback,
+            10,
+        )
+
+        # PUBLISHER ######################################
+        self.pub_rviz_text = self.create_publisher(String, "/main/rviz_text", 10)
+
+
+        self.log("Zed Sub Node is Running. Ready for command.")
+
 
     def command_callback(self, msg: String):
         recv_command = msg.data.strip().lower()
@@ -50,7 +82,7 @@ class ZedSubNode(Node):
         # elif recv_command == "srv_all_grasp":
         #     self.command_srv_all_grasp()
 
-    def pointcloud_callback(self, msg: PointCloud2):
+    def zed_pointcloud_callback(self, msg: PointCloud2):
         """
         Transform and save pointcloud only when commanded.
         """
@@ -70,12 +102,60 @@ class ZedSubNode(Node):
                 msg=msg, tf=tf, frame_id="base_link"
             )
 
-            self.pub_current_pointcloud.publish(transformed_pointcloud)
+            # self.pub_current_pointcloud.publish(transformed_pointcloud)
 
             self.data_pointcloud = transformed_pointcloud
             self.data_pointcloud_xyz = transformed_xyz
             self.capture_pointcloud = False
             self.log("Captured and saved pointcloud.")
+
+    def zed_rgb_callback(self, msg: Image):
+        """
+        Transform and save RGB only when commanded.
+        """
+        if self.capture_rgb:
+
+            try:
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            except Exception as e:
+                self.get_logger().error(f'CVBridge error: {e}')
+                return
+            
+            print(type(cv_image), cv_image.shape)
+
+            cv2.imshow('RGB', cv_image)
+            cv2.waitKey(1)  # Refresh frame
+
+            self.data_rgb = msg.data
+            # self.capture_rgb = False
+            # self.log("Captured RGB.")
+
+    def zed_depth_callback(self, msg: Image):
+        """
+        Transform and save DEPTH only when commanded.
+        """
+        if self.capture_depth:
+            try:
+                cv_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+            except Exception as e:
+                self.get_logger().error(f'CVBridge error: {e}')
+                return
+            
+            # print(type(cv_depth), cv_depth.shape)
+
+            # Replace NaNs with 0
+            cv_depth = np.nan_to_num(cv_depth, nan=0.0)
+            # Clip values to 0.0 - 5.0 meters
+            cv_depth = np.clip(cv_depth, 0.0, 5.0)
+
+            vis = cv2.normalize(cv_depth, None, 0, 255, cv2.NORM_MINMAX)
+            vis = vis.astype(np.uint8)
+            cv2.imshow("Depth View", vis)
+            cv2.waitKey(1)  # Refresh frame
+
+            self.data_depth = msg.data
+            # self.capture_depth = False
+            # self.log("Captured depth.")
 
     def log(self, text):
         # Log in terminal
@@ -90,32 +170,10 @@ class ZedSubNode(Node):
         Capture Current Point Cloud in self.data_pointcloud
         """
         self.capture_pointcloud = True
+        self.capture_rgb = True
+        self.capture_depth = True
         self.log("Ready to capture next pointcloud.")
 
-
-    ## CLIENT: ALL_GRASP ########################################
-    def command_srv_all_grasp(self):
-        self.log("I need mumu.")
-        request = GraspPoseSend.Request()
-        request.target_obj = self.get_parameter("target_obj").get_parameter_value().string_value
-        self.log("I need mumu2.")
-
-        # Ensure client is connected before calling
-        if not self.grasp_client.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service not available!")
-            return
-        future = self.grasp_client.call_async(request)
-        future.add_done_callback(self.command_srv_all_grasp_response_callback)
-
-    def command_srv_all_grasp_response_callback(self, future):
-        print("im back")
-        try:
-            response = future.result()
-            self.get_logger().info(f"Received response: {response}")
-            num_poses = len(response.grasp_poses.grasp_poses)
-            self.get_logger().info(f"Received {num_poses} grasp pose(s).")
-        except Exception as e:
-            self.get_logger().error(f'Failed to receive response: {str(e)}')
 
 def main(args=None):
     rclpy.init(args=args)

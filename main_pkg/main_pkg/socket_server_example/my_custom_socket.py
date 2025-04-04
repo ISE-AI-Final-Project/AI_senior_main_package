@@ -35,6 +35,8 @@ def decode(data, type_decode):
         msg = data.decode()
     elif type_decode == b"b":  # bool
         msg = bool(data[0])
+    elif type_decode == b"n":  # numpy array
+        msg = np.load(BytesIO(data), allow_pickle=False)
     else:  # fallback: raw bytes
         msg = data
     return msg
@@ -66,6 +68,11 @@ def encode(data, type_encode):
         np.save(buff, data, allow_pickle=False)
         msg = buff.getvalue()
         payload = b"J"
+    elif type_encode == "numpyarray":
+        buff = BytesIO()
+        np.save(buff, data, allow_pickle=False)
+        msg = buff.getvalue()
+        payload = b"n"
     else:
         raise ValueError(f"Unsupported return type: {type_encode}")
     return msg, payload
@@ -150,11 +157,19 @@ class MyClient:
         self.port = port
         self.client_name = client_name
 
-    def start(self):
+    def connect(self):
         """Start the client and connect to the server."""
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((self.host, self.port))
-        print(f"[{self.client_name}] Connected to server.")
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((self.host, self.port))
+            print(f"[{self.client_name}] Connected to server.")
+            return True
+        except Exception as e:
+            print(e)
+            return False
+
+    def disconnect(self):
+        self.socket.close()
 
     def request_image(self, img: np.array):
         """Send one image (legacy API) and get a float result back."""
