@@ -133,3 +133,76 @@ def pointcloud_xyz_to_simple_collision(
     #     o3d.visualization.draw_geometries([combined, pcd])
     # else:
     #     print("No voxels with 5 or more points found.")
+
+
+from geometry_msgs.msg import PoseStamped
+from tf2_ros import TransformException, Buffer
+from scipy.spatial.transform import Rotation as R
+import numpy as np
+import rclpy
+
+
+def transform_pose(
+    tf_buffer: Buffer,
+    pose_msg: PoseStamped,
+    current_frame: str,
+    new_frame: str,
+    node_logger=None,
+) -> PoseStamped | None:
+    """
+    Transforms a PoseStamped from current_frame to new_frame using tf_buffer and NumPy.
+
+    Args:
+        tf_buffer (tf2_ros.Buffer): TF buffer for lookup.
+        pose_msg (PoseStamped): Pose in current_frame.
+        current_frame (str): The source frame of the pose.
+        new_frame (str): The target frame to transform into.
+        node_logger (optional): Node logger for warnings (if available).
+
+    Returns:
+        PoseStamped or None: Transformed pose in new_frame, or None if transform fails.
+    """
+    try:
+        tf = tf_buffer.lookup_transform(
+            new_frame,             # target
+            current_frame,         # source
+            rclpy.time.Time(),     # latest available
+            rclpy.duration.Duration(seconds=0.5)
+        )
+    except TransformException as ex:
+        if node_logger:
+            node_logger.warn(f"Could not get transform from {current_frame} to {new_frame}: {ex}")
+        return None
+
+    # Build 4x4 transformation matrix
+    t = np.eye(4)
+    q = tf.transform.rotation
+    x = tf.transform.translation
+    t[:3, :3] = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+    t[:3, 3] = [x.x, x.y, x.z]
+
+    # Transform position
+    p = pose_msg.pose.position
+    pos_in = np.array([p.x, p.y, p.z, 1.0])
+    pos_out = t @ pos_in
+
+    # Transform orientation
+    q_pose = pose_msg.pose.orientation
+    r_pose = R.from_quat([q_pose.x, q_pose.y, q_pose.z, q_pose.w])
+    r_tf = R.from_quat([q.x, q.y, q.z, q.w])
+    r_out = r_tf * r_pose
+    q_out = r_out.as_quat()
+
+    # Build output PoseStamped
+    transformed_pose = PoseStamped()
+    transformed_pose.header = pose_msg.header
+    transformed_pose.header.frame_id = new_frame
+    transformed_pose.pose.position.x = pos_out[0]
+    transformed_pose.pose.position.y = pos_out[1]
+    transformed_pose.pose.position.z = pos_out[2]
+    transformed_pose.pose.orientation.x = q_out[0]
+    transformed_pose.pose.orientation.y = q_out[1]
+    transformed_pose.pose.orientation.z = q_out[2]
+    transformed_pose.pose.orientation.w = q_out[3]
+
+    return transformed_pose
