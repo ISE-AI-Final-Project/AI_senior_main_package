@@ -10,8 +10,8 @@ from sensor_msgs.msg import Image, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
 from tf2_ros import Buffer, TransformException, TransformListener
-
-from custom_srv_pkg.msg import GraspPose, GraspPoses
+from geometry_msgs.msg import PoseStamped
+from custom_srv_pkg.msg import GraspPose, GraspPoses, BestGraspPose
 from custom_srv_pkg.srv import GraspPoseSend, IMGSend, PointCloudSend
 
 from .utils import utils
@@ -29,7 +29,7 @@ class MainNode(Node):
             type=ParameterType.PARAMETER_STRING,
             description="A sample parameter",
         )
-        self.declare_parameter("target_obj", "obj_10", descriptor=param_descriptor)
+        self.declare_parameter("target_obj", "sunscreen", descriptor=param_descriptor)
 
         # SUBSCRIBER ################################################
         self.sub_command = self.create_subscription(
@@ -56,6 +56,8 @@ class MainNode(Node):
         # CLIENT ########################################
         self.client_all_grasp = self.create_client(GraspPoseSend, "GraspPose")
 
+        self.client_best_grasp = self.create_client(BestGraspPose, "BestGraspPose")
+
         self.client_make_collision = self.create_client(
             PointCloudSend, "CollisionMaker"
         )
@@ -66,6 +68,8 @@ class MainNode(Node):
         self.data_pointcloud = None  # Only stores one when captured
         self.data_pointcloud_xyz = None
         self.capture_pointcloud = False
+        self.data_all_grasp_pose = None
+        self.data_object_pose = None
 
         self.log("Main Node is Running. Ready for command.")
 
@@ -220,12 +224,53 @@ class MainNode(Node):
             self.get_logger().info(f"Received response: {response}")
             num_poses = len(response.grasp_poses.grasp_poses)
             self.get_logger().info(f"Received {num_poses} grasp pose(s).")
+            self.data_all_grasp_pose = response.grasp_poses
         except Exception as e:
             self.get_logger().error(f"Failed to receive response: {str(e)}")
 
     ## CLIENT: BEST_GRASP########################################
     def command_srv_best_grasp(self):
-        self.log("TODO: BEST GRASP")
+        if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("Service Best Grasp not available!")
+            return
+        pose = PoseStamped()
+        pose.header.frame_id = "world"  # or your actual TF frame
+        pose.header.stamp = self.get_clock().now().to_msg()
+
+        pose.pose.position.x = 1.0
+        pose.pose.position.y = 1.0
+        pose.pose.position.z = 1.0
+
+        # Identity orientation (no rotation)
+        pose.pose.orientation.x = 0.0
+        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.z = 0.0
+        pose.pose.orientation.w = 1.0
+
+        self.data_object_pose = pose
+
+        request = BestGraspPose.Request()
+        request.all_grasp_poses.grasp_poses = self.data_all_grasp_pose 
+        request.object_pose = self.data_object_pose  # Replace with your actual object pose
+
+        self.get_logger().info(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
+        self.log("I need mumu2.")
+
+        future = self.client_best_grasp.call_async(request)
+        future.add_done_callback(self.command_srv_best_grasp_response_callback)
+
+    def command_srv_best_grasp_response_callback(self, future):
+        print("im back")
+        try:
+            response = future.result()
+            best_grasp = response.best_grasp_pose
+
+            self.get_logger().info(
+                f"Received best grasp pose: x={best_grasp.pose.position.x:.3f}, "
+                f"y={best_grasp.pose.position.y:.3f}, z={best_grasp.pose.position.z:.3f}"
+            )
+        except Exception as e:
+            self.get_logger().error(f"Failed to receive response: {str(e)}")
 
     ## CLIENT: MAKE COLLISION ########################################
     def command_srv_make_collision(self):

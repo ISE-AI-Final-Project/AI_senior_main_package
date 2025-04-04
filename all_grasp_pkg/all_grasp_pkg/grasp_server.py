@@ -38,7 +38,7 @@ class AllGraspServer(Node):
         ##########################################
         # Load a point cloud
         pcd = o3d.io.read_point_cloud(
-            f"/home/icetenny/senior-2/senior_dataset/{request.target_obj}/{request.target_obj}_centered.ply"
+            f"/home/icynunnymumu/senior_dataset/{request.target_obj}/{request.target_obj}_centered.ply"
         )
 
         # Build a KDTree for neighbor search
