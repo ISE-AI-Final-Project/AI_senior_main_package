@@ -100,9 +100,7 @@ class MainNode(Node):
         self.data_pointcloud = None  # Only stores one when captured
         self.data_pointcloud_xyz = None
         self.capture_pointcloud = False
-<<<<<<< Updated upstream
-=======
-        self.data_all_grasp_pose = [1,2,3]
+        self.data_all_grasp_pose = None
         self.data_object_pose = None
 >>>>>>> Stashed changes
 
@@ -231,16 +229,7 @@ class MainNode(Node):
             num_poses = len(response.grasp_poses.grasp_poses)
             self.get_logger().info(f"Received {num_poses} grasp pose(s).")
         except Exception as e:
-            self.get_logger().error(f'Failed to receive response: {str(e)}')
-
-<<<<<<< Updated upstream
-
-    ## CLIENT: COLLISION ########################################
-    
-
-
-
-=======
+            self.get_logger().error(f"Failed to receive response: {str(e)}")
 
     ## CLIENT: BEST_GRASP########################################
     def command_srv_best_grasp(self):
@@ -286,41 +275,14 @@ class MainNode(Node):
         grasp_msg = GraspPoses()
         # grasp_msg.grasp_poses = self.data_all_grasp_pose
         request = BestGraspPose.Request()
-        # request.all_grasp_poses = grasp_msg
-        request.all_grasp_poses = self.data_all_grasp_pose
+        request.all_grasp_poses.grasp_poses = self.data_all_grasp_pose 
+        request.object_pose = self.data_object_pose  # Replace with your actual object pose
 
-        request.object_pose = self.data_object_pose  # assuming this is already defined
->>>>>>> Stashed changes
+        self.get_logger().info(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
+        self.log("I need mumu2.")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # ## CLIENT: ISM ########################################
-    # def send_request(self):
-    #     img1 = cv2.imread('/home/icynunnymumu/Desktop/b.jpg')
-    #     img2 = cv2.imread('/home/icynunnymumu/Desktop/a.jpg')
-
-    #     if img1 is None or img2 is None:
-    #         self.get_logger().error('Failed to load images. Check file paths.')
-    #         return
-
-    #     request = IMGSend.Request()
-    #     request.rgb = self.bridge.cv2_to_imgmsg(img1, encoding='bgr8')
-    #     request.depth = self.bridge.cv2_to_imgmsg(img2, encoding='bgr8')
-
-    #     future = self.ism_client.call_async(request)
-    #     future.add_done_callback(self.response_callback)
+        future = self.client_best_grasp.call_async(request)
+        future.add_done_callback(self.command_srv_best_grasp_response_callback)
 
     # def response_callback(self, future):
     #     # print("im back")
