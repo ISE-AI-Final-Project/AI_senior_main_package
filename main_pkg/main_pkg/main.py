@@ -4,6 +4,7 @@ from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
+<<<<<<< Updated upstream
 from custom_srv_pkg.srv import GraspPoseSend, IMGSend, PointCloudSend
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from sensor_msgs.msg import PointCloud2
@@ -15,6 +16,17 @@ import cv2
 from cv_bridge import CvBridge
 from tf2_ros import Buffer, TransformException, TransformListener
 from . import utils
+=======
+from sensor_msgs.msg import Image, PointCloud2
+from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import Header, String
+from tf2_ros import Buffer, TransformException, TransformListener
+from geometry_msgs.msg import Pose, Point, Quaternion, PoseStamped
+from custom_srv_pkg.msg import GraspPose, GraspPoses
+from custom_srv_pkg.srv import GraspPoseSend, IMGSend, PointCloudSend, BestGraspPose
+from std_msgs.msg import Header  
+from .utils import utils
+>>>>>>> Stashed changes
 
 
 class MainNode(Node):
@@ -88,6 +100,11 @@ class MainNode(Node):
         self.data_pointcloud = None  # Only stores one when captured
         self.data_pointcloud_xyz = None
         self.capture_pointcloud = False
+<<<<<<< Updated upstream
+=======
+        self.data_all_grasp_pose = [1,2,3]
+        self.data_object_pose = None
+>>>>>>> Stashed changes
 
         self.log("Main Node is Running. Ready for command.")
 
@@ -216,12 +233,64 @@ class MainNode(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to receive response: {str(e)}')
 
+<<<<<<< Updated upstream
 
     ## CLIENT: COLLISION ########################################
     
 
 
 
+=======
+
+    ## CLIENT: BEST_GRASP########################################
+    def command_srv_best_grasp(self):
+        if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("Service Best Grasp not available!")
+            return
+        
+        if self.data_all_grasp_pose is None:
+            self.log("NO all grasp data")
+            return
+
+        # self.data_all_grasp_pose = []
+
+        # Create pose
+        # pose = PoseStamped()
+        # pose.header.frame_id = "world"
+        # pose.pose.position.x = 0.00056425
+        # pose.pose.position.y = -0.01169335
+        # pose.pose.position.z = -0.00061085
+        # pose.pose.orientation.x = -0.018395
+        # pose.pose.orientation.y = 0.000926
+        # pose.pose.orientation.z = -0.178108
+        # pose.pose.orientation.w = 0.983798
+
+        # Create GraspPose and assign pose
+        # g = GraspPose()
+        # g.gripper_score = 483.00
+        # g.d_to_com = 0.012366076006890686
+        # g.ht_in_meter = pose.pose
+        # self.data_all_grasp_pose.append(g)
+
+        self.data_object_pose = PoseStamped()
+        self.data_object_pose.header.frame_id = "world"
+        self.data_object_pose.pose.position.x = 1.0
+        self.data_object_pose.pose.position.y = 1.0
+        self.data_object_pose.pose.position.z = 1.0
+        self.data_object_pose.pose.orientation.x = 0.0
+        self.data_object_pose.pose.orientation.y = 0.0
+        self.data_object_pose.pose.orientation.z = 0.0
+        self.data_object_pose.pose.orientation.w = 1.0
+
+        # Wrap in GraspPoses for service
+        grasp_msg = GraspPoses()
+        # grasp_msg.grasp_poses = self.data_all_grasp_pose
+        request = BestGraspPose.Request()
+        # request.all_grasp_poses = grasp_msg
+        request.all_grasp_poses = self.data_all_grasp_pose
+
+        request.object_pose = self.data_object_pose  # assuming this is already defined
+>>>>>>> Stashed changes
 
 
 
