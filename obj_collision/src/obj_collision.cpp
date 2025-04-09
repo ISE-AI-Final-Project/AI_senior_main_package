@@ -54,7 +54,7 @@ private:
           input_pose.header = obj_collision.header;
           input_pose.pose = primitive_pose;
 
-          tf_buffer_.transform(input_pose, transformed_pose, "panda_link0", tf2::durationFromSec(0.5));
+          tf_buffer_.transform(input_pose, transformed_pose, "world", tf2::durationFromSec(0.5));
           primitive_pose = transformed_pose.pose;
         }
 

@@ -94,6 +94,8 @@ private:
             const std::string &link1 = contact_pair.first.first;
             const std::string &link2 = contact_pair.first.second;
 
+            RCLCPP_WARN(this->get_logger(), "Collided: %s <--> %s", link1.c_str(), link2.c_str());
+
             bool is_link1_robot = robot_model_->hasLinkModel(link1);
             bool is_link2_robot = robot_model_->hasLinkModel(link2);
 

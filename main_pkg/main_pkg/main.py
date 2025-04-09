@@ -30,6 +30,7 @@ class MainNode(Node):
         super().__init__("main")
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.bridge = CvBridge()
 
         """
         ################### VARIABLE ###########################
@@ -437,7 +438,14 @@ class MainNode(Node):
         request.pointcloud =  self.data_pointcloud  # Correct field assignment
 
         future = self.client_make_collision.call_async(request)
-        future.add_done_callback(self.command_srv_all_grasp_response_callback)
+        future.add_done_callback(self.command_srv_make_collision_respone_callback)
+
+    def command_srv_make_collision_respone_callback(self, fut):
+        try:
+            result = fut.result()
+            self.log(f"Make Collision Success")
+        except Exception as e:
+            self.elog(f"Failed to make collision: -> {e}")
 
 
     ## CLIENT: GRIPPER CONTROL ########################################
