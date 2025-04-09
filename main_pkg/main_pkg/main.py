@@ -100,7 +100,7 @@ class MainNode(Node):
         self.data_pointcloud = None  # Only stores one when captured
         self.data_pointcloud_xyz = None
         self.capture_pointcloud = False
-        self.data_all_grasp_pose = None
+        self.data_all_grasp_pose = [1,2,3]
         self.data_object_pose = None
 >>>>>>> Stashed changes
 
@@ -231,6 +231,7 @@ class MainNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to receive response: {str(e)}")
 
+
     ## CLIENT: BEST_GRASP########################################
     def command_srv_best_grasp(self):
         if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
@@ -275,8 +276,10 @@ class MainNode(Node):
         grasp_msg = GraspPoses()
         # grasp_msg.grasp_poses = self.data_all_grasp_pose
         request = BestGraspPose.Request()
-        request.all_grasp_poses.grasp_poses = self.data_all_grasp_pose 
-        request.object_pose = self.data_object_pose  # Replace with your actual object pose
+        # request.all_grasp_poses = grasp_msg
+        request.all_grasp_poses = self.data_all_grasp_pose
+
+        request.object_pose = self.data_object_pose  # assuming this is already defined
 
         self.get_logger().info(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
         self.log("I need mumu2.")
