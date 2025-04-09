@@ -6,8 +6,9 @@ from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
+from sensor_msgs.msg import Image, PointCloud2
+from shape_msgs.msg import SolidPrimitive 
 
-from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -203,7 +204,7 @@ class MainNode(Node):
         if self.capture_pointcloud:
             try:
                 tf = self.tf_buffer.lookup_transform(
-                    "base_link",
+                    "world",
                     msg.header.frame_id,
                     rclpy.time.Time(),
                     rclpy.duration.Duration(seconds=0.5),
@@ -213,7 +214,7 @@ class MainNode(Node):
                 return
 
             transformed_pointcloud, transformed_xyz = utils.transform_pointcloud(
-                msg=msg, tf=tf, frame_id="base_link"
+                msg=msg, tf=tf, frame_id="world"
             )
 
             self.pub_current_pointcloud.publish(transformed_pointcloud)
@@ -284,42 +285,36 @@ class MainNode(Node):
         """
         Make Collision from self.data_pointcloud_xyz
         """
-        if self.data_pointcloud_xyz is None:
+
+        if self.data_pointcloud  is None:
             self.log("Cannot make Collision. Capture pointcloud first.")
             return
 
-        collision_boxes_center = utils.pointcloud_xyz_to_simple_collision(
-            self.data_pointcloud_xyz,
-            max_distance=1.5,
-            voxel_size=0.05,
-            min_pcl_per_cube=1,
-        )
+        # for idx, box_center in enumerate(collision_boxes_center):
+        #     collision_object = CollisionObject()
+        #     collision_object.header = Header()
+        #     collision_object.header.frame_id = "base_link"
+        #     collision_object.id = f"box_{idx}"
 
-        for idx, box_center in enumerate(collision_boxes_center):
-            collision_object = CollisionObject()
-            collision_object.header = Header()
-            collision_object.header.frame_id = "base_link"
-            collision_object.id = f"box_{idx}"
+        #     box = SolidPrimitive()
+        #     box.type = SolidPrimitive.BOX
+        #     box.dimensions = [0.05, 0.05, 0.05]
 
-            box = SolidPrimitive()
-            box.type = SolidPrimitive.BOX
-            box.dimensions = [0.05, 0.05, 0.05]
+        #     pose = Pose()
+        #     pose.position.x = float(box_center[0])
+        #     pose.position.y = float(box_center[1])
+        #     pose.position.z = float(box_center[2])
+        #     pose.orientation.x = 0.0
+        #     pose.orientation.y = 0.0
+        #     pose.orientation.z = 0.0
+        #     pose.orientation.w = 1.0
 
-            pose = Pose()
-            pose.position.x = float(box_center[0])
-            pose.position.y = float(box_center[1])
-            pose.position.z = float(box_center[2])
-            pose.orientation.x = 0.0
-            pose.orientation.y = 0.0
-            pose.orientation.z = 0.0
-            pose.orientation.w = 1.0
+        #     collision_object.primitives.append(box)
+        #     collision_object.primitive_poses.append(pose)
+        #     collision_object.operation = CollisionObject.ADD
 
-            collision_object.primitives.append(box)
-            collision_object.primitive_poses.append(pose)
-            collision_object.operation = CollisionObject.ADD
-
-            self.pub_collision.publish(collision_object)
-        self.log(f"Published CollisionObject")
+        #     self.pub_collision.publish(collision_object)
+        # self.log(f"Published CollisionObject")
 
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
@@ -473,14 +468,17 @@ class MainNode(Node):
 
     ## CLIENT: MAKE COLLISION ########################################
     def command_srv_make_collision(self):
-        # Currently Non service
-        self.command_make_collision()
+        if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Make Collision not available!")
+            return
 
-        # TODO: To service
-        # if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
-        #     self.elog("Service Make Collision not available!")
-        #     return
-        # self.log("TODO: MAKE COLLISION")
+        request = PointCloudSend.Request()
+        print(type(self.data_pointcloud )) 
+        request.pointcloud =  self.data_pointcloud  # Correct field assignment
+
+        future = self.client_make_collision.call_async(request)
+        future.add_done_callback(self.command_srv_all_grasp_response_callback)
+
 
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
