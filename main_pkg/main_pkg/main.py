@@ -19,10 +19,9 @@ from custom_srv_pkg.srv import (
     IMGSend,
     PointCloudSend,
 )
-from main_pkg.my_custom_socket import MyClient
-from main_pkg.utils import utils
 
 from .utils import utils
+from .utils.my_custom_socket import MyClient
 
 
 class MainNode(Node):
