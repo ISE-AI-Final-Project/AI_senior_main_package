@@ -42,7 +42,6 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 
 
-
 add_executable(robot_model_loader_node src/robot_model_loader_node.cpp)
 
 ament_target_dependencies(robot_model_loader_node
