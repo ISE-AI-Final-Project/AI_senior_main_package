@@ -272,41 +272,6 @@ class MainNode(Node):
         self.capture_depth = True
         self.log("Ready to capture next pointcloud.")
 
-    def command_make_collision(self):
-        """
-        Make Collision from self.data_pointcloud_xyz
-        """
-
-        if self.data_pointcloud  is None:
-            self.log("Cannot make Collision. Capture pointcloud first.")
-            return
-
-        # for idx, box_center in enumerate(collision_boxes_center):
-        #     collision_object = CollisionObject()
-        #     collision_object.header = Header()
-        #     collision_object.header.frame_id = "base_link"
-        #     collision_object.id = f"box_{idx}"
-
-        #     box = SolidPrimitive()
-        #     box.type = SolidPrimitive.BOX
-        #     box.dimensions = [0.05, 0.05, 0.05]
-
-        #     pose = Pose()
-        #     pose.position.x = float(box_center[0])
-        #     pose.position.y = float(box_center[1])
-        #     pose.position.z = float(box_center[2])
-        #     pose.orientation.x = 0.0
-        #     pose.orientation.y = 0.0
-        #     pose.orientation.z = 0.0
-        #     pose.orientation.w = 1.0
-
-        #     collision_object.primitives.append(box)
-        #     collision_object.primitive_poses.append(pose)
-        #     collision_object.operation = CollisionObject.ADD
-
-        #     self.pub_collision.publish(collision_object)
-        # self.log(f"Published CollisionObject")
-
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
         if self.data_array_rgb is None or self.data_array_depth is None:
@@ -461,6 +426,10 @@ class MainNode(Node):
     def command_srv_make_collision(self):
         if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
             self.elog("Service Make Collision not available!")
+            return
+        
+        if self.data_pointcloud  is None:
+            self.log("Cannot make Collision. Capture pointcloud first.")
             return
 
         request = PointCloudSend.Request()
