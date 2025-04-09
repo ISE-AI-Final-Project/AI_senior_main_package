@@ -17,6 +17,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GraspPose.msg"
   "msg/GraspPoses.msg"
+  "msg/StringArray.msg"
   "srv/GraspPoseSend.srv"
   "srv/IMGSend.srv"
   "srv/PESend.srv"
@@ -24,7 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Gripper.srv"
   "srv/PointCloudSend.srv"
   "srv/BestGraspPose.srv"
-  DEPENDENCIES sensor_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
+  DEPENDENCIES sensor_msgs
   DEPENDENCIES geometry_msgs 
 )
 
