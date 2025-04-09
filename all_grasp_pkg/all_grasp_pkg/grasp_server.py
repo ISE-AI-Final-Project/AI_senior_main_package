@@ -1,24 +1,28 @@
-import rclpy
-from rclpy.node import Node
-from custom_srv_pkg.srv import GraspPoseSend
-from custom_srv_pkg.msg import GraspPose, GraspPoses
-from sensor_msgs.msg import Image
-from geometry_msgs.msg import Pose
-
 import numpy as np
 import open3d as o3d
+import rclpy
+from geometry_msgs.msg import Pose
+from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
-from .my_gripper_with_contact import MyGripperWithContact
+from sensor_msgs.msg import Image
+
+from custom_srv_pkg.msg import GraspPose, GraspPoses
+from custom_srv_pkg.srv import GraspPoseSend
+
 from .main_all_grasp import *
+from .my_gripper_with_contact import MyGripperWithContact
+
 
 class AllGraspServer(Node):
     def __init__(self):
-        super().__init__('all_grasp_service')
-        self.srv = self.create_service(GraspPoseSend, 'GraspPose', self.handle_grasp_pose_request)
-        self.get_logger().info('Grasp Pose Server is ready.')
+        super().__init__("all_grasp_service")
+        self.srv = self.create_service(
+            GraspPoseSend, "GraspPose", self.handle_grasp_pose_request
+        )
+        self.get_logger().info("Grasp Pose Server is ready.")
 
     def handle_grasp_pose_request(self, request, response):
-        self.get_logger().info(f'Received request for: {request.target_obj}')
+        self.get_logger().info(f"Received request for: {request.target_obj}")
 
         # Constant Param ########################
         K_ESTIMATE_NORMAL = 10
@@ -33,7 +37,9 @@ class AllGraspServer(Node):
 
         ##########################################
         # Load a point cloud
-        pcd = o3d.io.read_point_cloud(f"obj/{request.target_obj}.ply")
+        pcd = o3d.io.read_point_cloud(
+            f"/home/icynunnymumu/senior_dataset/{request.target_obj}/{request.target_obj}_centered.ply"
+        )
 
         # Build a KDTree for neighbor search
         kdtree = o3d.geometry.KDTreeFlann(pcd)
@@ -65,7 +71,9 @@ class AllGraspServer(Node):
                 group_anchor_normal_vector[current_point_group_idx] = normals[idx]
                 group_index[idx] = current_point_group_idx
 
-            current_point_normal = group_anchor_normal_vector.get(current_point_group_idx)
+            current_point_normal = group_anchor_normal_vector.get(
+                current_point_group_idx
+            )
 
             [_, knn_idx, _] = kdtree.search_knn_vector_3d(point, K_GROUPING)
 
@@ -76,7 +84,9 @@ class AllGraspServer(Node):
 
                 if nn_group_idx == 0:
                     # Not in a group
-                    adjacent_dot_prod = np.dot(current_point_normal, normals[nn_point_idx])
+                    adjacent_dot_prod = np.dot(
+                        current_point_normal, normals[nn_point_idx]
+                    )
 
                     if adjacent_dot_prod > adjacent_cos_threshold:
                         # Assign to group
@@ -179,7 +189,9 @@ class AllGraspServer(Node):
                 if oppos_point_idx == point_idx:
                     continue
 
-                opposite_dot_prod = np.dot(-normals[point_idx], normals[oppos_point_idx])
+                opposite_dot_prod = np.dot(
+                    -normals[point_idx], normals[oppos_point_idx]
+                )
 
                 if opposite_dot_prod > opposite_cos_threshold:
                     line_set_id = tuple(sorted((point_idx, oppos_point_idx)))
@@ -199,7 +211,9 @@ class AllGraspServer(Node):
                     )  # Connect the two points
 
                     # Set line color (e.g., red)
-                    line_set.colors = o3d.utility.Vector3dVector([[1, 0, 0]])  # RGB: Red
+                    line_set.colors = o3d.utility.Vector3dVector(
+                        [[1, 0, 0]]
+                    )  # RGB: Red
 
                     line_set_list.append(line_set)
                     line_set_index.append(line_set_id)
@@ -274,36 +288,36 @@ class AllGraspServer(Node):
             print(HT_in_meter)
 
             translation = HT_in_meter[0:3, 3]
-    
+
             # Convert the entire HT matrix to a quaternion.
             # The function extracts the rotation matrix and converts it.
             quaternion = matrix_to_quaternion(HT_in_meter)
-            
+
             # Populate the Pose message.
             pose = Pose()
             pose.position.x = translation[0]
             pose.position.y = translation[1]
             pose.position.z = translation[2]
-            
+
             pose.orientation.x = quaternion[0]
             pose.orientation.y = quaternion[1]
             pose.orientation.z = quaternion[2]
             pose.orientation.w = quaternion[3]
 
-
             # Create the response message
             grasp_pose1 = GraspPose()
             grasp_pose1.ht_in_meter = pose
             grasp_pose1.d_to_com = d_to_com
-            grasp_pose1.gripper_score = gripper_area_score[index]
+            grasp_pose1.gripper_score = float(gripper_area_score[index])
 
             grasp_poses_msg.grasp_poses.append(grasp_pose1)
 
         response.grasp_poses = grasp_poses_msg  # Assign to response
-        self.get_logger().info('Sending.')
+        self.get_logger().info("Sending.")
         print(grasp_poses_msg)
 
         return response
+
 
 def main():
     rclpy.init()
@@ -311,5 +325,6 @@ def main():
     rclpy.spin(node)
     rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

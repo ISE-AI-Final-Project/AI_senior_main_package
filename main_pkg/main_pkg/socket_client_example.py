@@ -2,7 +2,7 @@ import cv2
 import rclpy
 from rclpy.node import Node
 
-from .my_custom_socket import MyClient
+from .utils.my_custom_socket import MyClient
 
 
 class SocketClientNode(Node):

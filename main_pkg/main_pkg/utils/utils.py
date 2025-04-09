@@ -257,7 +257,6 @@ def transform_pose(
 
     return transformed
 
-
 def chain_poses(
     pose_obj_wrt_frame1: Pose | PoseStamped,
     pose_frame1_wrt_frame2: Pose | PoseStamped,

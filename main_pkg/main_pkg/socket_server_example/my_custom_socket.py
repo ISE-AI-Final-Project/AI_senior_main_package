@@ -35,6 +35,8 @@ def decode(data, type_decode):
         msg = data.decode()
     elif type_decode == b"b":  # bool
         msg = bool(data[0])
+    elif type_decode == b"n":  # numpy array
+        msg = np.load(BytesIO(data), allow_pickle=False)
     else:  # fallback: raw bytes
         msg = data
     return msg
@@ -66,6 +68,11 @@ def encode(data, type_encode):
         np.save(buff, data, allow_pickle=False)
         msg = buff.getvalue()
         payload = b"J"
+    elif type_encode == "numpyarray":
+        buff = BytesIO()
+        np.save(buff, data, allow_pickle=False)
+        msg = buff.getvalue()
+        payload = b"n"
     else:
         raise ValueError(f"Unsupported return type: {type_encode}")
     return msg, payload

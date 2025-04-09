@@ -1,0 +1,75 @@
+# === Python bytecode ===
+__pycache__/
+*.py[cod]
+*$py.class
+
+# === Virtual environments ===
+venv/
+env/
+.venv/
+ENV/
+.Python
+
+# === Jupyter Notebook checkpoints ===
+.ipynb_checkpoints/
+
+# === VS Code ===
+.vscode/
+
+# === PyCharm ===
+.idea/
+*.iml
+
+# === macOS ===
+.DS_Store
+
+# === Linux ===
+*.swp
+
+# === Logs and dumps ===
+*.log
+*.out
+*.bak
+*.tmp
+
+# === Unit test cache ===
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+htmlcov/
+.coverage
+.cache
+
+# === Build artifacts ===
+build/
+dist/
+*.egg-info/
+*.eggs/
+
+# === binary data ===
+*.npy
+*.npz
+*.h5
+*.pt
+*.onnx
+
+# === Jupyter notebook outputs ===
+*.ipynb
+
+# === Custom socket dumps or messages ===
+*.sock
+*.dump
+*.bin
+
+# === Environment / config ===
+.env
+.env.*
+*.ini
+*.cfg
+*.toml
+
+# === System files ===
+Thumbs.db
+desktop.ini
+
