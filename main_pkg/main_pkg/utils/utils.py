@@ -1,9 +1,13 @@
 from collections import defaultdict
 
 import numpy as np
+import rclpy
 import sensor_msgs_py.point_cloud2 as pc2
+from geometry_msgs.msg import Pose, PoseStamped
 from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import PointCloud2, PointField
+from tf2_ros import Buffer, TransformException
 
 
 def transform_pointcloud(msg: PointCloud2, tf, frame_id="world") -> PointCloud2:
@@ -125,11 +129,194 @@ def pointcloud_xyz_to_simple_collision(
 
     return cubes
 
-    # Visualize
-    # if cubes:
-    #     combined = cubes[0]
-    #     for cube in cubes[1:]:
-    #         combined += cube
-    #     o3d.visualization.draw_geometries([combined, pcd])
-    # else:
-    #     print("No voxels with 5 or more points found.")
+
+def transform_pose_stamped(
+    tf_buffer: Buffer,
+    pose_msg: PoseStamped,
+    current_frame: str,
+    new_frame: str,
+) -> PoseStamped | None:
+    """
+    Transforms a PoseStamped from current_frame to new_frame using tf_buffer and NumPy.
+
+    Args:
+        tf_buffer (tf2_ros.Buffer): TF buffer for lookup.
+        pose_msg (PoseStamped): Pose in current_frame.
+        current_frame (str): The source frame of the pose.
+        new_frame (str): The target frame to transform into.
+        node_logger (optional): Node logger for warnings (if available).
+
+    Returns:
+        PoseStamped or None: Transformed pose in new_frame, or None if transform fails.
+    """
+    try:
+        tf = tf_buffer.lookup_transform(
+            new_frame,  # target
+            current_frame,  # source
+            rclpy.time.Time(),  # latest available
+            rclpy.duration.Duration(seconds=0.5),
+        )
+    except TransformException as ex:
+        print(f"Could not get transform from {current_frame} to {new_frame}: {ex}")
+        return None
+
+    # Build 4x4 transformation matrix
+    t = np.eye(4)
+    q = tf.transform.rotation
+    x = tf.transform.translation
+    t[:3, :3] = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+    t[:3, 3] = [x.x, x.y, x.z]
+
+    # Transform position
+    p = pose_msg.pose.position
+    pos_in = np.array([p.x, p.y, p.z, 1.0])
+    pos_out = t @ pos_in
+
+    # Transform orientation
+    q_pose = pose_msg.pose.orientation
+    r_pose = R.from_quat([q_pose.x, q_pose.y, q_pose.z, q_pose.w])
+    r_tf = R.from_quat([q.x, q.y, q.z, q.w])
+    r_out = r_tf * r_pose
+    q_out = r_out.as_quat()
+
+    # Build output PoseStamped
+    transformed_pose = PoseStamped()
+    transformed_pose.header = pose_msg.header
+    transformed_pose.header.frame_id = new_frame
+    transformed_pose.pose.position.x = pos_out[0]
+    transformed_pose.pose.position.y = pos_out[1]
+    transformed_pose.pose.position.z = pos_out[2]
+    transformed_pose.pose.orientation.x = q_out[0]
+    transformed_pose.pose.orientation.y = q_out[1]
+    transformed_pose.pose.orientation.z = q_out[2]
+    transformed_pose.pose.orientation.w = q_out[3]
+
+    return transformed_pose
+
+
+def transform_pose(
+    tf_buffer: Buffer,
+    pose_msg: Pose,
+    current_frame: str,
+    new_frame: str,
+) -> Pose | None:
+    """
+    Transforms a Pose from current_frame to new_frame using tf_buffer and NumPy.
+
+    Args:
+        tf_buffer (tf2_ros.Buffer): TF buffer for lookup.
+        pose_msg (Pose): Pose in current_frame.
+        current_frame (str): The source frame of the pose.
+        new_frame (str): The target frame to transform into.
+        node_logger (optional): Node logger for warnings (if available).
+
+    Returns:
+        Pose or None: Transformed pose in new_frame, or None if transform fails.
+    """
+    try:
+        tf = tf_buffer.lookup_transform(
+            new_frame,  # target
+            current_frame,  # source
+            rclpy.time.Time(),  # latest available
+            rclpy.duration.Duration(seconds=0.5),
+        )
+    except TransformException as ex:
+        print(f"Could not get transform from {current_frame} to {new_frame}: {ex}")
+        return None
+
+    # Build 4x4 transformation matrix
+    t = np.eye(4)
+    q = tf.transform.rotation
+    x = tf.transform.translation
+    t[:3, :3] = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+    t[:3, 3] = [x.x, x.y, x.z]
+
+    # Transform position
+    p = pose_msg.position
+    pos_in = np.array([p.x, p.y, p.z, 1.0])
+    pos_out = t @ pos_in
+
+    # Transform orientation
+    q_pose = pose_msg.orientation
+    r_pose = R.from_quat([q_pose.x, q_pose.y, q_pose.z, q_pose.w])
+    r_tf = R.from_quat([q.x, q.y, q.z, q.w])
+    r_out = r_tf * r_pose
+    q_out = r_out.as_quat()
+
+    # Create PoseStamped with generated header
+    transformed = PoseStamped()
+    transformed.header.frame_id = new_frame
+    transformed.header.stamp = tf.header.stamp  # Use timestamp from the TF itself
+    transformed.pose.position.x = pos_out[0]
+    transformed.pose.position.y = pos_out[1]
+    transformed.pose.position.z = pos_out[2]
+    transformed.pose.orientation.x = q_out[0]
+    transformed.pose.orientation.y = q_out[1]
+    transformed.pose.orientation.z = q_out[2]
+    transformed.pose.orientation.w = q_out[3]
+
+    return transformed
+
+def chain_poses(
+    pose_obj_wrt_frame1: Pose | PoseStamped,
+    pose_frame1_wrt_frame2: Pose | PoseStamped,
+    target_frame: str,
+) -> PoseStamped:
+    """
+    Computes pose of an object in frame2 given:
+    - pose of the object in frame1
+    - pose of frame1 in frame2
+
+    Accepts both Pose and PoseStamped types as input.
+
+    Args:
+        pose_obj_wrt_frame1 (Pose or PoseStamped): Pose of the object in frame1.
+        pose_frame1_wrt_frame2 (Pose or PoseStamped): Pose of frame1 in frame2.
+        target_frame (str): Final frame ID (frame2).
+
+    Returns:
+        PoseStamped: Pose of the object in frame2.
+    """
+
+    def extract_pose(p):
+        return p.pose if isinstance(p, PoseStamped) else p
+
+    def pose_to_matrix(pose: Pose) -> np.ndarray:
+        T = np.eye(4)
+        trans = [pose.position.x, pose.position.y, pose.position.z]
+        rot = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+        T[:3, :3] = R.from_quat(rot).as_matrix()
+        T[:3, 3] = trans
+        return T
+
+    pose1 = extract_pose(pose_obj_wrt_frame1)
+    pose2 = extract_pose(pose_frame1_wrt_frame2)
+
+    T_obj_in_f1 = pose_to_matrix(pose1)
+    T_f1_in_f2 = pose_to_matrix(pose2)
+    T_obj_in_f2 = T_f1_in_f2 @ T_obj_in_f1
+
+    # Extract final pose
+    pos = T_obj_in_f2[:3, 3]
+    rot = R.from_matrix(T_obj_in_f2[:3, :3]).as_quat()
+
+    pose_out = PoseStamped()
+    pose_out.header.frame_id = target_frame
+
+    # Set timestamp if either input had it
+    if isinstance(pose_obj_wrt_frame1, PoseStamped):
+        pose_out.header.stamp = pose_obj_wrt_frame1.header.stamp
+    elif isinstance(pose_frame1_wrt_frame2, PoseStamped):
+        pose_out.header.stamp = pose_frame1_wrt_frame2.header.stamp
+    else:
+        pose_out.header.stamp = rclpy.clock.Clock().now().to_msg()
+        
+    pose_out.pose.position.x = pos[0]
+    pose_out.pose.position.y = pos[1]
+    pose_out.pose.position.z = pos[2]
+    pose_out.pose.orientation.x = rot[0]
+    pose_out.pose.orientation.y = rot[1]
+    pose_out.pose.orientation.z = rot[2]
+    pose_out.pose.orientation.w = rot[3]
+
+    return pose_out
