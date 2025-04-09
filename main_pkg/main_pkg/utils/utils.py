@@ -256,3 +256,67 @@ def transform_pose(
     transformed.pose.orientation.w = q_out[3]
 
     return transformed
+
+def chain_poses(
+    pose_obj_wrt_frame1: Pose | PoseStamped,
+    pose_frame1_wrt_frame2: Pose | PoseStamped,
+    target_frame: str,
+) -> PoseStamped:
+    """
+    Computes pose of an object in frame2 given:
+    - pose of the object in frame1
+    - pose of frame1 in frame2
+
+    Accepts both Pose and PoseStamped types as input.
+
+    Args:
+        pose_obj_wrt_frame1 (Pose or PoseStamped): Pose of the object in frame1.
+        pose_frame1_wrt_frame2 (Pose or PoseStamped): Pose of frame1 in frame2.
+        target_frame (str): Final frame ID (frame2).
+
+    Returns:
+        PoseStamped: Pose of the object in frame2.
+    """
+
+    def extract_pose(p):
+        return p.pose if isinstance(p, PoseStamped) else p
+
+    def pose_to_matrix(pose: Pose) -> np.ndarray:
+        T = np.eye(4)
+        trans = [pose.position.x, pose.position.y, pose.position.z]
+        rot = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+        T[:3, :3] = R.from_quat(rot).as_matrix()
+        T[:3, 3] = trans
+        return T
+
+    pose1 = extract_pose(pose_obj_wrt_frame1)
+    pose2 = extract_pose(pose_frame1_wrt_frame2)
+
+    T_obj_in_f1 = pose_to_matrix(pose1)
+    T_f1_in_f2 = pose_to_matrix(pose2)
+    T_obj_in_f2 = T_f1_in_f2 @ T_obj_in_f1
+
+    # Extract final pose
+    pos = T_obj_in_f2[:3, 3]
+    rot = R.from_matrix(T_obj_in_f2[:3, :3]).as_quat()
+
+    pose_out = PoseStamped()
+    pose_out.header.frame_id = target_frame
+
+    # Set timestamp if either input had it
+    if isinstance(pose_obj_wrt_frame1, PoseStamped):
+        pose_out.header.stamp = pose_obj_wrt_frame1.header.stamp
+    elif isinstance(pose_frame1_wrt_frame2, PoseStamped):
+        pose_out.header.stamp = pose_frame1_wrt_frame2.header.stamp
+    else:
+        pose_out.header.stamp = rclpy.clock.Clock().now().to_msg()
+        
+    pose_out.pose.position.x = pos[0]
+    pose_out.pose.position.y = pos[1]
+    pose_out.pose.position.z = pos[2]
+    pose_out.pose.orientation.x = rot[0]
+    pose_out.pose.orientation.y = rot[1]
+    pose_out.pose.orientation.z = rot[2]
+    pose_out.pose.orientation.w = rot[3]
+
+    return pose_out

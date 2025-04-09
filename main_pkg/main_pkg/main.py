@@ -6,10 +6,20 @@ from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
+
+from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import Header, String
+from tf2_ros import Buffer, TransformException, TransformListener
+
 from sensor_msgs.msg import Image, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
 from tf2_ros import Buffer, TransformException, TransformListener
+from geometry_msgs.msg import Pose, Point, Quaternion, PoseStamped
+from custom_srv_pkg.msg import GraspPose, GraspPoses
+from custom_srv_pkg.srv import GraspPoseSend, IMGSend, PointCloudSend, BestGraspPose
+from std_msgs.msg import Header  
+from .utils import utils
 
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from custom_srv_pkg.srv import (
@@ -104,6 +114,12 @@ class MainNode(Node):
         self.pub_collision = self.create_publisher(
             CollisionObject, "collision_object_topic", 10
         )
+
+        self.data_pointcloud = None  # Only stores one when captured
+        self.data_pointcloud_xyz = None
+        self.capture_pointcloud = False
+        self.data_all_grasp_pose = [1,2,3]
+        self.data_object_pose = None
 
         """
         ################### CLIENT ###########################
@@ -365,6 +381,57 @@ class MainNode(Node):
         if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
             self.elog("Service Best Grasp not available!")
             return
+        
+        if self.data_all_grasp_pose is None:
+            self.elog("NO all grasp data")
+            return
+
+        # self.data_all_grasp_pose = []
+
+        # Create pose
+        # pose = PoseStamped()
+        # pose.header.frame_id = "world"
+        # pose.pose.position.x = 0.00056425
+        # pose.pose.position.y = -0.01169335
+        # pose.pose.position.z = -0.00061085
+        # pose.pose.orientation.x = -0.018395
+        # pose.pose.orientation.y = 0.000926
+        # pose.pose.orientation.z = -0.178108
+        # pose.pose.orientation.w = 0.983798
+
+        # Create GraspPose and assign pose
+        # g = GraspPose()
+        # g.gripper_score = 483.00
+        # g.d_to_com = 0.012366076006890686
+        # g.ht_in_meter = pose.pose
+        # self.data_all_grasp_pose.append(g)
+
+        self.data_object_pose = PoseStamped()
+        self.data_object_pose.header.frame_id = "world"
+        self.data_object_pose.pose.position.x = 1.0
+        self.data_object_pose.pose.position.y = 1.0
+        self.data_object_pose.pose.position.z = 1.0
+        self.data_object_pose.pose.orientation.x = 0.0
+        self.data_object_pose.pose.orientation.y = 0.0
+        self.data_object_pose.pose.orientation.z = 0.0
+        self.data_object_pose.pose.orientation.w = 1.0
+
+        # Wrap in GraspPoses for service
+        grasp_msg = GraspPoses()
+        # grasp_msg.grasp_poses = self.data_all_grasp_pose
+        request = BestGraspPose.Request()
+        # request.all_grasp_poses = grasp_msg
+        request.all_grasp_poses = self.data_all_grasp_pose
+
+        request.object_pose = self.data_object_pose  # assuming this is already defined
+
+        self.get_logger().info(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
+        self.log("I need mumu2.")
+
+        future = self.client_best_grasp.call_async(request)
+        future.add_done_callback(self.command_srv_best_grasp_response_callback)
+        
+            
         pose = PoseStamped()
         pose.header.frame_id = "world"  # or your actual TF frame
         pose.header.stamp = self.get_clock().now().to_msg()
