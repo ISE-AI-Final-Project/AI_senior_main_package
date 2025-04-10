@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import open3d as o3d
 import rclpy
@@ -37,9 +39,18 @@ class AllGraspServer(Node):
 
         ##########################################
         # Load a point cloud
-        pcd = o3d.io.read_point_cloud(
-            f"/home/icynunnymumu/senior_dataset/{request.target_obj}/{request.target_obj}_centered.ply"
+
+        cad_file = os.path.join(
+            request.cad_path_prefix,
+            f"{request.target_obj}/{request.target_obj}_centered.ply",
         )
+
+        if os.path.exists(cad_file):
+            self.get_logger().info(f"Reading CAD file at: {cad_file}")
+        else:
+            self.get_logger().error(f"Reading CAD file Does not exist: {cad_file}")
+
+        pcd = o3d.io.read_point_cloud(cad_file)
 
         # Build a KDTree for neighbor search
         kdtree = o3d.geometry.KDTreeFlann(pcd)

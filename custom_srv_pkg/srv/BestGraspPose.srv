@@ -1,4 +1,4 @@
 GraspPoses all_grasp_poses
 geometry_msgs/PoseStamped object_pose
 ---
-geometry_msgs/PoseStamped best_grasp_pose
+geometry_msgs/PoseArray best_grasp_poses

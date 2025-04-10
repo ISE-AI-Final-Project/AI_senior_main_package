@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
+from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
@@ -24,7 +24,7 @@ from .utils import utils
 from .utils.my_custom_socket import MyClient
 
 
-class MainNode(Node):
+class MainNode(Node):    
     def __init__(self):
         super().__init__("main")
         self.tf_buffer = Buffer()
@@ -35,37 +35,51 @@ class MainNode(Node):
         ################### VARIABLE ###########################
         """
         # Point Cloud
-        self.data_pointcloud = None
-        self.data_pointcloud_xyz = None
+        self.data_pointcloud = PointCloud2()
+        self.data_pointcloud_xyz = np.array([])
         self.capture_pointcloud = False
 
         # RGB
-        self.data_msg_rgb = None
-        self.data_array_rgb = None
+        self.data_msg_rgb = Image()
+        self.data_array_rgb = np.array([])
         self.capture_rgb = False
 
         # Depth
-        self.data_msg_depth = None
-        self.data_array_depth = None
+        self.data_msg_depth = Image()
+        self.data_array_depth = np.array([])
         self.capture_depth = False
 
         # Mask
-        self.data_mask = None
+        self.data_mask = np.array([])
 
         # Pose
-        self.data_object_pose = None
-        self.data_all_grasp_pose = None
-        self.data_best_grasp_pose = None
+        self.data_object_pose = PoseStamped()
+        self.data_all_grasp_pose = GraspPoses()
+        self.data_best_grasp_pose = PoseArray()
 
         """
         ################### PARAM ###########################
         """
-        param_descriptor = ParameterDescriptor(
+        param_descriptor_target_object = ParameterDescriptor(
             name="target_obj",
             type=ParameterType.PARAMETER_STRING,
-            description="A sample parameter",
+            description="Target Object",
         )
-        self.declare_parameter("target_obj", "sunscreen", descriptor=param_descriptor)
+        self.declare_parameter(
+            "target_obj", "sunscreen", descriptor=param_descriptor_target_object
+        )
+
+        param_descriptor_cad_path_prefix = ParameterDescriptor(
+            name="cad_path_prefix",
+            type=ParameterType.PARAMETER_STRING,
+            description="Path to folder containing CAD file of object.",
+        )
+
+        self.declare_parameter(
+            "cad_path_prefix",
+            "/home/icetenny/senior-2/senior_dataset/",
+            descriptor=param_descriptor_cad_path_prefix,
+        )
 
         """
         ################### SUBSCRIBER ###########################
@@ -100,24 +114,30 @@ class MainNode(Node):
         self.pub_rviz_text = self.create_publisher(String, "/main/rviz_text", 10)
 
         self.pub_current_pointcloud = self.create_publisher(
-            PointCloud2, "/main/current_pointcloud", 10
+            PointCloud2, "/main/captured_pointcloud", 10
         )
 
-        self.pub_collision = self.create_publisher(
-            CollisionObject, "collision_object_topic", 10
+        self.pub_best_grasp_poses = self.create_publisher(
+            PoseArray, "/main/best_grasp_poses", 10
         )
 
-        self.data_pointcloud = None  # Only stores one when captured
-        self.data_pointcloud_xyz = None
-        self.capture_pointcloud = False
-        self.data_all_grasp_pose = [1,2,3]
-        self.data_object_pose = None
+        # self.pub_collision = self.create_publisher(
+        #     CollisionObject, "collision_object_topic", 10
+        # )
+
+        self.pub_captured_rgb = self.create_publisher(
+            Image, "/main/captured_rgb", 10
+        )
+
+        self.pub_captured_depth = self.create_publisher(
+            Image, "/main/captured_depth", 10
+        )
 
         """
         ################### CLIENT ###########################
         """
-        self.client_gripper_control = self.create_client(Gripper, 'gripper_control')
-        
+        self.client_gripper_control = self.create_client(Gripper, "gripper_control")
+
         self.client_all_grasp = self.create_client(GraspPoseSend, "GraspPose")
 
         self.client_best_grasp = self.create_client(BestGraspPose, "BestGraspPose")
@@ -156,6 +176,15 @@ class MainNode(Node):
         string_msg = String()
         string_msg.data = text
         self.pub_rviz_text.publish(string_msg)
+
+    def is_empty(self, obj):
+        if obj is None:
+            return True
+        if isinstance(obj, np.ndarray):
+            return obj.size == 0
+        if hasattr(obj, 'data'):
+            return not obj.data
+        return False
 
     def command_callback(self, msg: String):
         """
@@ -231,6 +260,7 @@ class MainNode(Node):
                 return
             self.data_array_rgb = array_rgb
             self.capture_rgb = False
+            self.pub_captured_rgb.publish(msg.data)
             self.log("Captured RGB.")
 
     def zed_depth_callback(self, msg: Image):
@@ -261,6 +291,7 @@ class MainNode(Node):
 
             self.data_array_depth = array_depth_mm
             self.capture_depth = False
+            self.pub_captured_depth.publish(msg.data)
             self.log("Captured depth.")
 
     def command_capture(self):
@@ -274,7 +305,7 @@ class MainNode(Node):
 
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
-        if self.data_array_rgb is None or self.data_array_depth is None:
+        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
             self.log("No RGB or Depth Data.")
             return
 
@@ -314,13 +345,16 @@ class MainNode(Node):
             self.get_parameter("target_obj").get_parameter_value().string_value
         )
 
+        request.cad_path_prefix = (
+            self.get_parameter("cad_path_prefix").get_parameter_value().string_value
+        )
+
         future = self.client_all_grasp.call_async(request)
         future.add_done_callback(self.command_srv_all_grasp_response_callback)
 
     def command_srv_all_grasp_response_callback(self, future):
         try:
             response = future.result()
-            self.log(f"Received response: {response}")
             num_poses = len(response.grasp_poses.grasp_poses)
             self.log(f"Received {num_poses} grasp pose(s).")
             self.data_all_grasp_pose = response.grasp_poses
@@ -332,80 +366,30 @@ class MainNode(Node):
         if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
             self.elog("Service Best Grasp not available!")
             return
-        
-        if self.data_all_grasp_pose is None:
+
+        if self.is_empty(self.data_all_grasp_pose):
             self.elog("NO all grasp data")
             return
 
-        # self.data_all_grasp_pose = []
-
-        # Create pose
-        # pose = PoseStamped()
-        # pose.header.frame_id = "world"
-        # pose.pose.position.x = 0.00056425
-        # pose.pose.position.y = -0.01169335
-        # pose.pose.position.z = -0.00061085
-        # pose.pose.orientation.x = -0.018395
-        # pose.pose.orientation.y = 0.000926
-        # pose.pose.orientation.z = -0.178108
-        # pose.pose.orientation.w = 0.983798
-
-        # Create GraspPose and assign pose
-        # g = GraspPose()
-        # g.gripper_score = 483.00
-        # g.d_to_com = 0.012366076006890686
-        # g.ht_in_meter = pose.pose
-        # self.data_all_grasp_pose.append(g)
-
         self.data_object_pose = PoseStamped()
         self.data_object_pose.header.frame_id = "world"
-        self.data_object_pose.pose.position.x = 1.0
-        self.data_object_pose.pose.position.y = 1.0
-        self.data_object_pose.pose.position.z = 1.0
+        self.data_object_pose.pose.position.x = 0.5
+        self.data_object_pose.pose.position.y = 0.7
+        self.data_object_pose.pose.position.z = 1.2
         self.data_object_pose.pose.orientation.x = 0.0
         self.data_object_pose.pose.orientation.y = 0.0
         self.data_object_pose.pose.orientation.z = 0.0
         self.data_object_pose.pose.orientation.w = 1.0
 
-        # Wrap in GraspPoses for service
-        grasp_msg = GraspPoses()
-        # grasp_msg.grasp_poses = self.data_all_grasp_pose
         request = BestGraspPose.Request()
-        # request.all_grasp_poses = grasp_msg
+
         request.all_grasp_poses = self.data_all_grasp_pose
 
-        request.object_pose = self.data_object_pose  # assuming this is already defined
+        request.object_pose = self.data_object_pose
 
-        self.get_logger().info(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
-        self.log("I need mumu2.")
-
-        future = self.client_best_grasp.call_async(request)
-        future.add_done_callback(self.command_srv_best_grasp_response_callback)
-        
-            
-        pose = PoseStamped()
-        pose.header.frame_id = "world"  # or your actual TF frame
-        pose.header.stamp = self.get_clock().now().to_msg()
-
-        pose.pose.position.x = 1.0
-        pose.pose.position.y = 1.0
-        pose.pose.position.z = 1.0
-
-        # Identity orientation (no rotation)
-        pose.pose.orientation.x = 0.0
-        pose.pose.orientation.y = 0.0
-        pose.pose.orientation.z = 0.0
-        pose.pose.orientation.w = 1.0
-
-        self.data_object_pose = pose
-
-        request = BestGraspPose.Request()
-        request.all_grasp_poses.grasp_poses = self.data_all_grasp_pose
-        request.object_pose = (
-            self.data_object_pose
-        )  # Replace with your actual object pose
-
-        self.log(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
+        self.get_logger().info(
+            f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses."
+        )
 
         future = self.client_best_grasp.call_async(request)
         future.add_done_callback(self.command_srv_best_grasp_response_callback)
@@ -413,12 +397,12 @@ class MainNode(Node):
     def command_srv_best_grasp_response_callback(self, future):
         try:
             response = future.result()
-            best_grasp = response.best_grasp_pose
-
+            sorted_best_grasp_poses = response.best_grasp_poses.poses
             self.log(
-                f"Received best grasp pose: x={best_grasp.pose.position.x:.3f}, "
-                f"y={best_grasp.pose.position.y:.3f}, z={best_grasp.pose.position.z:.3f}"
+                f"Received best grasp pose: x={sorted_best_grasp_poses[0].position.x:.3f}, "
+                f"y={sorted_best_grasp_poses[0].position.y:.3f}, z={sorted_best_grasp_poses[0].position.z:.3f}"
             )
+            self.pub_best_grasp_poses.publish(response.best_grasp_poses)
         except Exception as e:
             self.elog(f"Failed to receive response: {str(e)}")
 
@@ -427,14 +411,14 @@ class MainNode(Node):
         if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
             self.elog("Service Make Collision not available!")
             return
-        
-        if self.data_pointcloud  is None:
+
+        if self.is_empty(self.data_pointcloud):
             self.log("Cannot make Collision. Capture pointcloud first.")
             return
 
         request = PointCloudSend.Request()
-        print(type(self.data_pointcloud )) 
-        request.pointcloud =  self.data_pointcloud  # Correct field assignment
+        print(type(self.data_pointcloud))
+        request.pointcloud = self.data_pointcloud  # Correct field assignment
 
         future = self.client_make_collision.call_async(request)
         future.add_done_callback(self.command_srv_make_collision_respone_callback)
@@ -446,17 +430,18 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to make collision: -> {e}")
 
-
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
         if not self.client_gripper_control.wait_for_service(timeout_sec=3.0):
             self.elog("Service Gripper Control not available!")
             return
-        
+
         request = Gripper.Request()
         request.gripper_distance = distance_mm
         future = self.client_gripper_control.call_async(request)
-        future.add_done_callback(self.srv_gripper_control_send_distance_respone_callback)
+        future.add_done_callback(
+            self.srv_gripper_control_send_distance_respone_callback
+        )
 
     def srv_gripper_control_send_distance_respone_callback(self, fut):
         try:

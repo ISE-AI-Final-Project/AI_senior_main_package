@@ -12,6 +12,8 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_visual_tools REQUIRED)
 
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+
 find_package(rosidl_default_generators REQUIRED)
 
 find_package(custom_srv_pkg REQUIRED)
@@ -54,6 +56,16 @@ install(TARGETS add_collision_object move_robot robot_server echo_pose
 
 install(PROGRAMS
   scripts/send_pose.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/send_pose_rviz.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/send_pose_rviz_feedback.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

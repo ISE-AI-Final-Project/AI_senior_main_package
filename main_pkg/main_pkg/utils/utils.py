@@ -260,8 +260,7 @@ def transform_pose(
 def chain_poses(
     pose_obj_wrt_frame1: Pose | PoseStamped,
     pose_frame1_wrt_frame2: Pose | PoseStamped,
-    target_frame: str,
-) -> PoseStamped:
+) -> Pose:
     """
     Computes pose of an object in frame2 given:
     - pose of the object in frame1
@@ -275,7 +274,7 @@ def chain_poses(
         target_frame (str): Final frame ID (frame2).
 
     Returns:
-        PoseStamped: Pose of the object in frame2.
+        Pose: Pose of the object in frame2.
     """
 
     def extract_pose(p):
@@ -300,23 +299,63 @@ def chain_poses(
     pos = T_obj_in_f2[:3, 3]
     rot = R.from_matrix(T_obj_in_f2[:3, :3]).as_quat()
 
-    pose_out = PoseStamped()
-    pose_out.header.frame_id = target_frame
+    pose_out = Pose()
+
+    pose_out.position.x = pos[0]
+    pose_out.position.y = pos[1]
+    pose_out.position.z = pos[2]
+    pose_out.orientation.x = rot[0]
+    pose_out.orientation.y = rot[1]
+    pose_out.orientation.z = rot[2]
+    pose_out.orientation.w = rot[3]
+
+    return pose_out
+
+
+def chain_poses_stamped(
+    pose_obj_wrt_frame1: Pose | PoseStamped,
+    pose_frame1_wrt_frame2: Pose | PoseStamped,
+    target_frame: str,
+) -> PoseStamped:
+    """
+    Computes pose of an object in frame2 given:
+    - pose of the object in frame1
+    - pose of frame1 in frame2
+
+    Accepts both Pose and PoseStamped types as input.
+
+    Args:
+        pose_obj_wrt_frame1 (Pose or PoseStamped): Pose of the object in frame1.
+        pose_frame1_wrt_frame2 (Pose or PoseStamped): Pose of frame1 in frame2.
+        target_frame (str): Final frame ID (frame2).
+
+    Returns:
+        PoseStamped: Pose of the object in frame2.
+    """
+    transformed_pose = chain_poses(pose_obj_wrt_frame1, pose_frame1_wrt_frame2)
+
+    pose_stamped_out = PoseStamped()
+    pose_stamped_out.header.frame_id = target_frame
 
     # Set timestamp if either input had it
     if isinstance(pose_obj_wrt_frame1, PoseStamped):
-        pose_out.header.stamp = pose_obj_wrt_frame1.header.stamp
+        pose_stamped_out.header.stamp = pose_obj_wrt_frame1.header.stamp
     elif isinstance(pose_frame1_wrt_frame2, PoseStamped):
-        pose_out.header.stamp = pose_frame1_wrt_frame2.header.stamp
+        pose_stamped_out.header.stamp = pose_frame1_wrt_frame2.header.stamp
     else:
-        pose_out.header.stamp = rclpy.clock.Clock().now().to_msg()
+        pose_stamped_out.header.stamp = rclpy.clock.Clock().now().to_msg()
         
-    pose_out.pose.position.x = pos[0]
-    pose_out.pose.position.y = pos[1]
-    pose_out.pose.position.z = pos[2]
-    pose_out.pose.orientation.x = rot[0]
-    pose_out.pose.orientation.y = rot[1]
-    pose_out.pose.orientation.z = rot[2]
-    pose_out.pose.orientation.w = rot[3]
+    pose_stamped_out.pose = transformed_pose
 
-    return pose_out
+    return pose_stamped_out
+
+
+def pose_to_pose_stamped(pose: Pose, frame_id: str = "world", time = None) -> PoseStamped:
+    pose_stamped = PoseStamped()
+    pose_stamped.pose = pose
+    pose_stamped.header.frame_id = frame_id
+    pose_stamped.header.stamp = time if time is not None else rclpy.time.Time().to_msg()
+    return pose_stamped
+
+def pose_stamped_to_pose(pose_stamped: PoseStamped) -> Pose:
+    return pose_stamped.pose
