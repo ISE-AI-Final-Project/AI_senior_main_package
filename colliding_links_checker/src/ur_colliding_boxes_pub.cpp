@@ -88,15 +88,28 @@ private:
 
     //
     // Part 1: Collision Checking and Removing Unwanted Collision Objects
-    //
-
     collision_detection::CollisionRequest collision_request;
     collision_detection::CollisionResult collision_result;
     collision_request.contacts = true;
-    collision_request.max_contacts = 100;
-    collision_request.max_contacts_per_pair =10;
-
-    // Check for collisions between the robot and other objects.
+    collision_request.max_contacts = 1000;
+    collision_request.max_contacts_per_pair = 10;
+    
+    // Test self-collision on current state
+    planning_scene_->checkSelfCollision(collision_request, collision_result);
+    RCLCPP_INFO(this->get_logger(), "Test 1: Current state is %s self collision",
+                collision_result.collision ? "in" : "not in");
+    
+    // Set to random joint positions
+    moveit::core::RobotState& current_state = planning_scene_->getCurrentStateNonConst();
+    current_state.setToRandomPositions();
+    
+    collision_result.clear();
+    planning_scene_->checkSelfCollision(collision_request, collision_result);
+    RCLCPP_INFO(this->get_logger(), "Test 2: Current state is %s self collision",
+                collision_result.collision ? "in" : "not in");
+    
+    collision_result.clear();
+    
     planning_scene_->checkCollision(collision_request, collision_result);
 
     // Set to store collision object IDs that conflict with the robot.
@@ -127,6 +140,10 @@ private:
       {
         std::vector<std::string> removal_ids(removal_set.begin(), removal_set.end());
         RCLCPP_INFO(this->get_logger(), "Removing %zu colliding collision objects.", removal_ids.size());
+        for (const auto& id : removal_ids) {
+          RCLCPP_INFO(this->get_logger(), "Removing collision object: %s", id.c_str());
+      }
+      
         planning_scene_interface_.removeCollisionObjects(removal_ids);
       }
       else
@@ -184,6 +201,11 @@ private:
         tracked_objects_.insert(obj_collision.id);
         // Apply the collision object to the planning scene.
         planning_scene_interface_.applyCollisionObjects({obj_collision});
+        if (!removal_set.empty())
+      {
+        std::vector<std::string> removal_ids(removal_set.begin(), removal_set.end());
+        planning_scene_interface_.removeCollisionObjects(removal_ids);
+      }
       }
       catch (const tf2::TransformException &ex)
       {
