@@ -1,3 +1,6 @@
+import os
+from datetime import datetime
+
 import cv2
 import numpy as np
 import rclpy
@@ -52,6 +55,13 @@ class MainNode(Node):
         """
         ################### VARIABLE ###########################
         """
+        # File name
+        self.node_run_folder_name = (
+            f"Run-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S-%f')[:-4]}"
+        )
+        self.capture_folder_name = f"Cap-{self.get_current_time()}"
+        self.req_ism_time = self.get_current_time
+
         # Point Cloud
         self.data_pointcloud = PointCloud2()
         self.data_pointcloud_xyz = np.array([])
@@ -68,7 +78,8 @@ class MainNode(Node):
         self.capture_depth = False
 
         # Mask
-        self.data_mask = np.array([])
+        self.data_best_mask = np.array([])
+        self.data_msg_best_mask = Image()
 
         # Pose
         self.data_object_pose = PoseStamped()
@@ -157,6 +168,8 @@ class MainNode(Node):
             Image, "/main/captured_depth", 10
         )
 
+        self.pub_best_mask = self.create_publisher(Image, "/main/best_mask", 10)
+
         self.pub_object_pose = self.create_publisher(
             PoseStamped, "/main/object_pose", 10
         )
@@ -190,13 +203,18 @@ class MainNode(Node):
 
         # Socket Client
         self.client_ism = MyClient(
-            host="127.0.0.1", port=88888, client_name="Main ISM Client"
+            host="127.0.0.1", port=11111, client_name="Main ISM Client"
         )
         self.client_pem = MyClient(
-            host="127.0.0.1", port=99999, client_name="Main PEM Client"
+            host="127.0.0.1", port=22222, client_name="Main PEM Client"
         )
 
         # Finish Init
+        os.makedirs(
+            os.path.join(
+                self.get_str_param("output_path_prefix"), self.node_run_folder_name
+            )
+        )
         self.log("Main Node is Running. Ready for command.")
 
     def log(self, text):
@@ -240,6 +258,11 @@ class MainNode(Node):
         except Exception:
             return False
 
+    def get_str_param(self, param_name):
+        return self.get_parameter(param_name).get_parameter_value().string_value
+
+    def get_current_time(self):
+        return f"{datetime.now().strftime('%H-%M-%S-%f')[:-4]}"
 
     def command_callback(self, msg: String):
         """
@@ -290,13 +313,25 @@ class MainNode(Node):
 
             # Convert to array
             try:
-                array_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+                array_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+                array_rgb = cv2.cvtColor(array_bgr, cv2.COLOR_BGR2RGB)
             except Exception as e:
                 self.elog(f"CVBridge error: {e}")
                 return
             self.data_array_rgb = array_rgb
             self.capture_rgb = False
-            self.pub_captured_rgb.publish(msg.data)
+            self.pub_captured_rgb.publish(msg)
+            # Save Image
+            image_utils.save_rgb_image(
+                rgb_image=self.data_array_rgb,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name="rgb",
+            )
+
             self.log("Captured RGB.")
 
     def zed_depth_callback(self, msg: Image):
@@ -327,13 +362,27 @@ class MainNode(Node):
 
             self.data_array_depth = array_depth_mm
             self.capture_depth = False
-            self.pub_captured_depth.publish(msg.data)
+            self.pub_captured_depth.publish(msg)
+
+            # Save Image
+            image_utils.save_depth_uint16(
+                depth_maps=self.data_array_depth,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name="depth",
+            )
+
             self.log("Captured depth.")
 
     def command_capture(self):
         """
         Capture Current Point Cloud in self.data_pointcloud
         """
+        self.capture_folder_name = f"Cap-{self.get_current_time()}"
+
         self.capture_pointcloud = True
         self.capture_rgb = True
         self.capture_depth = True
@@ -352,15 +401,44 @@ class MainNode(Node):
 
         # Send request
         try:
-            result = self.client_ism.request_msg(
-                msg_type_in=["numpyarray", "numpyarray", "string"],
+            best_mask, best_score, combined_result = self.client_ism.request_msg(
+                msg_type_in=["numpyarray", "numpyarray", "string", "string"],
                 msg_in=[
                     self.data_array_rgb,
                     self.data_array_depth,
-                    self.get_parameter("target_obj").get_parameter_value().string_value,
+                    self.get_str_param("target_obj"),
+                    self.get_str_param("cad_path_prefix"),
                 ],
             )
-            self.log(f"Response: {result}")
+
+            self.req_ism_time = self.get_current_time()
+
+            self.data_best_mask = best_mask
+            self.data_msg_best_mask = image_utils.mask_to_ros_image(self.data_best_mask)
+
+            # Save Image
+            image_utils.save_binary_mask(
+                mask=best_mask,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name=f"{self.req_ism_time}_best_mask",
+            )
+            image_utils.save_rgb_image(
+                rgb_images=combined_result,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name=f"{self.req_ism_time}_ism_result",
+            )
+
+            self.pub_best_mask.publish(self.data_msg_best_mask)
+
+            self.log(f"Response Received from ISM with best score: {best_score}")
         except Exception as e:
             self.elog(f"Failed to send request: {e}")
 
@@ -382,6 +460,8 @@ class MainNode(Node):
 
         self.data_object_pose = object_pose
 
+        self.pub_object_pose.publish(self.data_object_pose)
+
     ## CLIENT: ALL_GRASP ########################################
     def command_srv_all_grasp(self):
         if not self.client_all_grasp.wait_for_service(timeout_sec=3.0):
@@ -389,13 +469,9 @@ class MainNode(Node):
             return
 
         request = GraspPoseSend.Request()
-        request.target_obj = (
-            self.get_parameter("target_obj").get_parameter_value().string_value
-        )
+        request.target_obj = (self.get_str_param("target_obj"),)
 
-        request.cad_path_prefix = (
-            self.get_parameter("cad_path_prefix").get_parameter_value().string_value
-        )
+        request.cad_path_prefix = (self.get_str_param("cad_path_prefix"),)
 
         future = self.client_all_grasp.call_async(request)
         future.add_done_callback(self.command_srv_all_grasp_response_callback)
@@ -418,11 +494,10 @@ class MainNode(Node):
         if self.is_empty(self.data_all_grasp_pose):
             self.elog("NO all grasp data")
             return
-        
+
         if self.is_empty(self.data_object_pose):
             self.elog("NO Object Pose Data, Req PEM First")
             return
-
 
         request = BestGraspPose.Request()
 
