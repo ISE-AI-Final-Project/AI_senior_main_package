@@ -20,11 +20,11 @@ from custom_srv_pkg.srv import (
     PointCloudSend,
 )
 
-from .utils import utils
+from .utils import image_utils, utils
 from .utils.my_custom_socket import MyClient
 
 
-class MainNode(Node):    
+class MainNode(Node):
     def __init__(self):
         super().__init__("main")
         self.tf_buffer = Buffer()
@@ -55,7 +55,9 @@ class MainNode(Node):
         # Pose
         self.data_object_pose = PoseStamped()
         self.data_all_grasp_pose = GraspPoses()
-        self.data_best_grasp_pose = PoseArray()
+        self.data_sorted_grasp_goal_pose = PoseArray()
+        self.data_sorted_grasp_grip_pose = PoseArray()
+        self.data_sorted_grasp_gripper_distance = []
 
         """
         ################### PARAM ###########################
@@ -79,6 +81,18 @@ class MainNode(Node):
             "cad_path_prefix",
             "/home/icetenny/senior-2/senior_dataset/",
             descriptor=param_descriptor_cad_path_prefix,
+        )
+
+        param_descriptor_output_path_prefix = ParameterDescriptor(
+            name="output_path_prefix",
+            type=ParameterType.PARAMETER_STRING,
+            description="Path to folder for output files.",
+        )
+
+        self.declare_parameter(
+            "output_path_prefix",
+            "/home/icetenny/senior-2/results/",
+            descriptor=param_descriptor_output_path_prefix,
         )
 
         """
@@ -117,17 +131,19 @@ class MainNode(Node):
             PointCloud2, "/main/captured_pointcloud", 10
         )
 
-        self.pub_best_grasp_poses = self.create_publisher(
-            PoseArray, "/main/best_grasp_poses", 10
+        self.pub_best_grasp_goal_poses = self.create_publisher(
+            PoseArray, "/main/best_grasp_goal_poses", 10
+        )
+
+        self.pub_best_grasp_grip_poses = self.create_publisher(
+            PoseArray, "/main/best_grasp_grip_poses", 10
         )
 
         # self.pub_collision = self.create_publisher(
         #     CollisionObject, "collision_object_topic", 10
         # )
 
-        self.pub_captured_rgb = self.create_publisher(
-            Image, "/main/captured_rgb", 10
-        )
+        self.pub_captured_rgb = self.create_publisher(Image, "/main/captured_rgb", 10)
 
         self.pub_captured_depth = self.create_publisher(
             Image, "/main/captured_depth", 10
@@ -146,11 +162,9 @@ class MainNode(Node):
             PointCloudSend, "CollisionMaker"
         )
 
-        # self.client_ism = self.create_client(IMGSend, "image_service")
-
         # Socket Client
-        self.client_ism = MyClient(host="127.0.0.1", port=65432)
-        self.client_pem = MyClient(host="127.0.0.1", port=99999)
+        self.client_ism = MyClient(host="127.0.0.1", port=88888, client_name="Main ISM Client")
+        self.client_pem = MyClient(host="127.0.0.1", port=99999, client_name="Main PEM Client")
 
         # Finish Init
         self.log("Main Node is Running. Ready for command.")
@@ -165,6 +179,13 @@ class MainNode(Node):
         string_msg = String()
         string_msg.data = text
         self.pub_rviz_text.publish(string_msg)
+    
+    def tlog(self, text):
+        """
+        Log Text into Terminal only
+        """
+        # Log in terminal
+        self.get_logger().info(text)
 
     def elog(self, text):
         """
@@ -182,7 +203,7 @@ class MainNode(Node):
             return True
         if isinstance(obj, np.ndarray):
             return obj.size == 0
-        if hasattr(obj, 'data'):
+        if hasattr(obj, "data"):
             return not obj.data
         return False
 
@@ -397,12 +418,19 @@ class MainNode(Node):
     def command_srv_best_grasp_response_callback(self, future):
         try:
             response = future.result()
-            sorted_best_grasp_poses = response.best_grasp_poses.poses
+            self.data_sorted_grasp_goal_pose = response.sorted_goal_poses
+            self.data_sorted_grasp_grip_pose = response.sorted_grip_poses
+            self.data_sorted_grasp_gripper_distance = response.gripper_distance
+
+            best_goal = self.data_sorted_grasp_goal_pose.poses[0]
+            best_grip = self.data_sorted_grasp_grip_pose.poses[0]
+            best_gripper_distance = self.data_sorted_grasp_gripper_distance[0]
             self.log(
-                f"Received best grasp pose: x={sorted_best_grasp_poses[0].position.x:.3f}, "
-                f"y={sorted_best_grasp_poses[0].position.y:.3f}, z={sorted_best_grasp_poses[0].position.z:.3f}"
+                f"Received best goal pose: {best_goal}, Best Grip Pose: {best_grip} with {best_gripper_distance}"
             )
-            self.pub_best_grasp_poses.publish(response.best_grasp_poses)
+            self.pub_best_grasp_goal_poses.publish(self.data_sorted_grasp_goal_pose)
+            self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
+
         except Exception as e:
             self.elog(f"Failed to receive response: {str(e)}")
 
@@ -417,7 +445,7 @@ class MainNode(Node):
             return
 
         request = PointCloudSend.Request()
-        print(type(self.data_pointcloud))
+        self.tlog(type(self.data_pointcloud))
         request.pointcloud = self.data_pointcloud  # Correct field assignment
 
         future = self.client_make_collision.call_async(request)
