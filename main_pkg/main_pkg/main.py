@@ -14,6 +14,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from custom_srv_pkg.srv import (
     BestGraspPose,
+    GoalGripPlan,
     GraspPoseSend,
     Gripper,
     IMGSend,
@@ -30,6 +31,23 @@ class MainNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.bridge = CvBridge()
+
+        self.command_map = {
+            "capture": self.command_capture,
+            "req_ism": self.command_srv_req_ism,
+            "req_pem": self.command_srv_req_pem,
+            "generate_all_grasp": self.command_srv_all_grasp,
+            "generate_best_grasp": self.command_srv_best_grasp,
+            "make_collision": self.command_srv_make_collision,
+            "plan_goal": self.command_plan_goal,
+            # "trigger_goal": self.command_trigger_goal,
+            # "plan_grip": self.command_plan_grip,
+            # "trigger_grip": self.command_trigger_grip,
+            # "plan_home": self.command_plan_home,
+            # "trigger_home": self.command_trigger_home,
+            "gripper_open": self.command_gripper_open,
+            "gripper_close": self.command_gripper_close,
+        }
 
         """
         ################### VARIABLE ###########################
@@ -58,6 +76,8 @@ class MainNode(Node):
         self.data_sorted_grasp_goal_pose = PoseArray()
         self.data_sorted_grasp_grip_pose = PoseArray()
         self.data_sorted_grasp_gripper_distance = []
+
+        self.goal_grip_passed_index = None
 
         """
         ################### PARAM ###########################
@@ -127,8 +147,18 @@ class MainNode(Node):
         """
         self.pub_rviz_text = self.create_publisher(String, "/main/rviz_text", 10)
 
-        self.pub_current_pointcloud = self.create_publisher(
+        self.pub_captured_pointcloud = self.create_publisher(
             PointCloud2, "/main/captured_pointcloud", 10
+        )
+
+        self.pub_captured_rgb = self.create_publisher(Image, "/main/captured_rgb", 10)
+
+        self.pub_captured_depth = self.create_publisher(
+            Image, "/main/captured_depth", 10
+        )
+
+        self.pub_object_pose = self.create_publisher(
+            PoseStamped, "/main/object_pose", 10
         )
 
         self.pub_best_grasp_goal_poses = self.create_publisher(
@@ -143,12 +173,6 @@ class MainNode(Node):
         #     CollisionObject, "collision_object_topic", 10
         # )
 
-        self.pub_captured_rgb = self.create_publisher(Image, "/main/captured_rgb", 10)
-
-        self.pub_captured_depth = self.create_publisher(
-            Image, "/main/captured_depth", 10
-        )
-
         """
         ################### CLIENT ###########################
         """
@@ -162,9 +186,15 @@ class MainNode(Node):
             PointCloudSend, "CollisionMaker"
         )
 
+        self.client_goal_grip_plan = self.create_client(GoalGripPlan, "GoalGripPlan")
+
         # Socket Client
-        self.client_ism = MyClient(host="127.0.0.1", port=88888, client_name="Main ISM Client")
-        self.client_pem = MyClient(host="127.0.0.1", port=99999, client_name="Main PEM Client")
+        self.client_ism = MyClient(
+            host="127.0.0.1", port=88888, client_name="Main ISM Client"
+        )
+        self.client_pem = MyClient(
+            host="127.0.0.1", port=99999, client_name="Main PEM Client"
+        )
 
         # Finish Init
         self.log("Main Node is Running. Ready for command.")
@@ -179,7 +209,7 @@ class MainNode(Node):
         string_msg = String()
         string_msg.data = text
         self.pub_rviz_text.publish(string_msg)
-    
+
     def tlog(self, text):
         """
         Log Text into Terminal only
@@ -205,7 +235,11 @@ class MainNode(Node):
             return obj.size == 0
         if hasattr(obj, "data"):
             return not obj.data
-        return False
+        try:
+            return obj == type(obj)()
+        except Exception:
+            return False
+
 
     def command_callback(self, msg: String):
         """
@@ -214,29 +248,10 @@ class MainNode(Node):
         recv_command = msg.data.strip().lower()
         self.log(f"Received command: {recv_command}")
 
-        if recv_command == "capture":
-            self.command_capture()
-
-        elif recv_command == "req_ism":
-            self.command_srv_req_ism()
-
-        elif recv_command == "req_pem":
-            self.command_srv_req_pem()
-
-        elif recv_command == "generate_all_grasp":
-            self.command_srv_all_grasp()
-
-        elif recv_command == "generate_best_grasp":
-            self.command_srv_best_grasp()
-
-        elif recv_command == "make_collision":
-            self.command_srv_make_collision()
-
-        elif recv_command == "gripper_open":
-            self.command_gripper_open()
-
-        elif recv_command == "gripper_close":
-            self.command_gripper_close()
+        if recv_command in self.command_map:
+            self.command_map[recv_command]()
+        else:
+            self.get_logger().warn(f"Unknown command received: {recv_command}")
 
     def zed_pointcloud_callback(self, msg: PointCloud2):
         """
@@ -258,7 +273,7 @@ class MainNode(Node):
                 msg=msg, tf=tf, frame_id="world"
             )
 
-            self.pub_current_pointcloud.publish(transformed_pointcloud)
+            self.pub_captured_pointcloud.publish(transformed_pointcloud)
 
             self.data_pointcloud = transformed_pointcloud
             self.data_pointcloud_xyz = transformed_xyz
@@ -355,6 +370,18 @@ class MainNode(Node):
     def command_srv_req_pem(self):
         self.log("TODO: REQ PEM")
 
+        object_pose = PoseStamped()
+        object_pose.header.frame_id = "world"
+        object_pose.pose.position.x = 0.5
+        object_pose.pose.position.y = 0.7
+        object_pose.pose.position.z = 1.2
+        object_pose.pose.orientation.x = 0.0
+        object_pose.pose.orientation.y = 0.0
+        object_pose.pose.orientation.z = 0.0
+        object_pose.pose.orientation.w = 1.0
+
+        self.data_object_pose = object_pose
+
     ## CLIENT: ALL_GRASP ########################################
     def command_srv_all_grasp(self):
         if not self.client_all_grasp.wait_for_service(timeout_sec=3.0):
@@ -391,16 +418,11 @@ class MainNode(Node):
         if self.is_empty(self.data_all_grasp_pose):
             self.elog("NO all grasp data")
             return
+        
+        if self.is_empty(self.data_object_pose):
+            self.elog("NO Object Pose Data, Req PEM First")
+            return
 
-        self.data_object_pose = PoseStamped()
-        self.data_object_pose.header.frame_id = "world"
-        self.data_object_pose.pose.position.x = 0.5
-        self.data_object_pose.pose.position.y = 0.7
-        self.data_object_pose.pose.position.z = 1.2
-        self.data_object_pose.pose.orientation.x = 0.0
-        self.data_object_pose.pose.orientation.y = 0.0
-        self.data_object_pose.pose.orientation.z = 0.0
-        self.data_object_pose.pose.orientation.w = 1.0
 
         request = BestGraspPose.Request()
 
@@ -422,12 +444,13 @@ class MainNode(Node):
             self.data_sorted_grasp_grip_pose = response.sorted_grip_poses
             self.data_sorted_grasp_gripper_distance = response.gripper_distance
 
-            best_goal = self.data_sorted_grasp_goal_pose.poses[0]
-            best_grip = self.data_sorted_grasp_grip_pose.poses[0]
-            best_gripper_distance = self.data_sorted_grasp_gripper_distance[0]
-            self.log(
-                f"Received best goal pose: {best_goal}, Best Grip Pose: {best_grip} with {best_gripper_distance}"
-            )
+            num_passed_grasp = len(self.data_sorted_grasp_goal_pose.poses)
+
+            if num_passed_grasp == 0:
+                self.elog("No grasp passed criteria")
+                return
+
+            self.log(f"Received {num_passed_grasp} best goal pose.")
             self.pub_best_grasp_goal_poses.publish(self.data_sorted_grasp_goal_pose)
             self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
 
@@ -441,11 +464,10 @@ class MainNode(Node):
             return
 
         if self.is_empty(self.data_pointcloud):
-            self.log("Cannot make Collision. Capture pointcloud first.")
+            self.elog("Cannot make Collision. Capture pointcloud first.")
             return
 
         request = PointCloudSend.Request()
-        self.tlog(type(self.data_pointcloud))
         request.pointcloud = self.data_pointcloud  # Correct field assignment
 
         future = self.client_make_collision.call_async(request)
@@ -457,6 +479,34 @@ class MainNode(Node):
             self.log(f"Make Collision Success")
         except Exception as e:
             self.elog(f"Failed to make collision: -> {e}")
+
+    ## CLIENT: PLAN GOAL ############################################
+    def command_plan_goal(self):
+        if not self.client_goal_grip_plan.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Goal Grip Plan not available!")
+            return
+        if self.is_empty(self.data_sorted_grasp_goal_pose) or self.is_empty(
+            self.data_sorted_grasp_grip_pose
+        ):
+            self.log("No Best Grasp Data")
+            return
+
+        request = GoalGripPlan.Request()
+        request.sorted_goal_poses = self.data_sorted_grasp_goal_pose
+        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
+
+        future = self.client_goal_grip_plan.call_async(request)
+        future.add_done_callback(self.command_plan_goal_respone_callback)
+
+    def command_plan_goal_respone_callback(self, fut):
+        try:
+            result = fut.result()
+            self.goal_grip_passed_index = result.passed_index
+            self.log(
+                f"Plan Goal Grip Success with index: {self.goal_grip_passed_index}"
+            )
+        except Exception as e:
+            self.elog(f"Failed to plan goal and grip: -> {e}")
 
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
@@ -478,11 +528,11 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to send distance: -> {e}")
 
-    ## CLIENT: GRIPPER OPEN ###########################################
+    ## GRIPPER OPEN ###########################################
     def command_gripper_open(self):
         self.srv_gripper_control_send_distance(distance_mm=55)
 
-    ## CLIENT: GRIPPER CLOSE ########################################
+    ## GRIPPER CLOSE ########################################
     def command_gripper_close(self):
         self.srv_gripper_control_send_distance(distance_mm=0)
 
