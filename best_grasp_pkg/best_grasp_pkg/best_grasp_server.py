@@ -1,6 +1,6 @@
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped, Pose
 from rclpy.node import Node
 from tf2_ros import Buffer, TransformListener
 
@@ -48,27 +48,104 @@ class BestGraspService(Node):
             )
             return response
 
-        # Calculate All Score
+
+        # Condition for select best grasp
+        # - Goal and grip must pass minimun 50 cm
+        # - Minimize distance grip to arm robot
+        # - Gravity selection: select the one Z axis downward 
+
         grasp_pair = []
+        score_threshold = 0.5
+        robot_base_position = np.array([0.0, 0.0, 0.0])  # Example robot base at origin
+
+        # tf base_link to world
+        # try:
+        #     tf_robot = self.tf_buffer.lookup_transform(
+        #         "world", "base_link", rclpy.time.Time(), rclpy.duration.Duration(seconds=1.0)
+        #     )
+        #     robot_base_position = np.array([
+        #         tf_robot.transform.translation.x,
+        #         tf_robot.transform.translation.y,
+        #         tf_robot.transform.translation.z
+        #     ])
+        # except TransformException as ex:
+        #     self.get_logger().error(f"Failed to get robot base transform: {ex}")
+        #     return response
+
+        # for grasp in transformed_grasps:
+        #     obj_pos = np.array([
+        #         request.object_pose.pose.position.x,
+        #         request.object_pose.pose.position.y,
+        #         request.object_pose.pose.position.z
+        #     ])
+        #     grasp_pos = np.array([
+        #         grasp.position.x,
+        #         grasp.position.y,
+        #         grasp.position.z
+        #     ])
+        #     goal_to_grip_distance = np.linalg.norm(obj_pos - grasp_pos + 0.08)
+
+        #     if goal_to_grip_distance < 0.5:
+        #         continue
+
+        #     grip_to_robot_distance = np.linalg.norm(grasp_pos - robot_base_position)
+
+        #     import tf_transformations
+        #     quat = [
+        #         grasp.orientation.x,
+        #         grasp.orientation.y,
+        #         grasp.orientation.z,
+        #         grasp.orientation.w,
+        #     ]
+        #     rot_matrix = tf_transformations.quaternion_matrix(quat)[:3, :3]
+        #     z_axis = rot_matrix[:, 2]
+        #     gravity_score = np.dot(z_axis, np.array([0, 0, -1]))
+
+        #     score = 0.4 * (1.0 / (1e-3 + grip_to_robot_distance)) + 0.6 * gravity_score
+
+        #     if score > score_threshold:
+        #         grasp_pair.append((score, grasp))
+
+
+        # Calculate All Score
+        grasp_list = []
         score_theshold = 0.5
-        for grasp in transformed_grasps:
+        for grasp_grip in transformed_grasps:
+
+            goal_offset = Pose()
+            goal_offset.position.x = 0.0
+            goal_offset.position.y = 0.0
+            goal_offset.position.z = -0.04 # 4 cm back
+
+            grasp_goal = chain_poses(goal_offset, grasp_grip)
+
             # Random
             grasp_score = np.random.random()
             if grasp_score > score_theshold:
-                grasp_pair.append((grasp_score, grasp))
+                grasp_list.append((grasp_score, grasp_grip, grasp_goal))
 
         # Sort by score
-        sorted_grasp_pair = sorted(grasp_pair, key=lambda x: x[0], reverse=True)
+        sorted_grasp_pair = sorted(grasp_list, key=lambda x: x[0], reverse=True)
 
         # Return only the sorted poses
-        sorted_grasp = [pose for _, pose in sorted_grasp_pair]
+        sorted_score = [score for score, grip, goal in sorted_grasp_pair]
+        sorted_grip = [grip for score, grip, goal in sorted_grasp_pair]
+        sorted_goal = [goal for score, grip, goal in sorted_grasp_pair]
 
-        sorted_poses_array = PoseArray()
-        sorted_poses_array.header.frame_id = "world"
-        sorted_poses_array.poses = sorted_grasp
-        response.sorted_grip_poses = sorted_poses_array
+        sorted_grip_poses_array = PoseArray()
+        sorted_grip_poses_array.header.frame_id = "world"
+        sorted_grip_poses_array.poses = sorted_grip
 
-        self.get_logger().info(f"{len(sorted_grasp)} Best grasp pose sorted and returned.")
+        sorted_goal_poses_array = PoseArray()
+        sorted_goal_poses_array.header.frame_id = "world"
+        sorted_goal_poses_array.poses = sorted_goal
+
+        # Temp
+        response.sorted_goal_poses = sorted_goal_poses_array
+        response.sorted_grip_poses = sorted_grip_poses_array
+        response.gripper_distance = sorted_score
+
+        self.get_logger().info(f"{len(sorted_grip)} Best grasp pose sorted and returned.")
         return response
 
 
