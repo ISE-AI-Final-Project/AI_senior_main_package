@@ -325,7 +325,7 @@ class AllGraspServer(Node):
 
         response.grasp_poses = grasp_poses_msg  # Assign to response
         self.get_logger().info("Sending.")
-        print(grasp_poses_msg)
+        # print(grasp_poses_msg)
 
         return response
 

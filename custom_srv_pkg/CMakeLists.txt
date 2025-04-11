@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Gripper.srv"
   "srv/PointCloudSend.srv"
   "srv/BestGraspPose.srv"
+  "srv/GoalGripPlan.srv"
   DEPENDENCIES sensor_msgs
   DEPENDENCIES geometry_msgs 
 )
