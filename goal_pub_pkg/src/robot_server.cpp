@@ -1,9 +1,11 @@
-#include <geometry_msgs/msg/pose.hpp>
-#include "custom_srv_pkg/srv/tcp_pose.hpp"
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit_visual_tools/moveit_visual_tools.h>
 #include "std_srvs/srv/trigger.hpp"
+#include <geometry_msgs/msg/pose.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 using Trigger = std_srvs::srv::Trigger;
 
@@ -19,35 +21,80 @@ const moveit::core::JointModelGroup* joint_model_group;
 // Global plan (shared between services)
 moveit::planning_interface::MoveGroupInterface::Plan my_plan;
 
-void handleRequest(
-  const std::shared_ptr<custom_srv_pkg::srv::TCPPose::Request> request,
-  std::shared_ptr<custom_srv_pkg::srv::TCPPose::Response> response)
+void handleRequest(const geometry_msgs::msg::PoseArray & pose_array)
 {
-  RCLCPP_INFO(LOGGER, "Received pose: [%.3f, %.3f, %.3f]",
-              request->target_pose.position.x,
-              request->target_pose.position.y,
-              request->target_pose.position.z);
+  RCLCPP_INFO(LOGGER, "Received %zu poses, checking for a valid plan...", pose_array.poses.size());
 
-  move_group->setPoseTarget(request->target_pose);
+  bool found_valid_plan = false;
 
-  bool success = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  RCLCPP_INFO(LOGGER, "Planning result: %s", success ? "SUCCESS" : "FAILED");
+  for (size_t i = 0; i < pose_array.poses.size(); ++i)
+  {
+    auto pose = pose_array.poses[i];
 
-  if (!success) {
-    response->success = false;
-    response->message = "Planning failed";
-    return;
+    RCLCPP_INFO(LOGGER, "Trying pose #%zu: [%.3f, %.3f, %.3f]",
+                i,
+                pose.position.x,
+                pose.position.y,
+                pose.position.z);
+
+    // tf2::Quaternion q_orig, q_rot_y, q_result;
+    // tf2::fromMsg(pose.orientation, q_orig);
+  
+    // // Define +90° rotation around Y-axis (in radians)
+    // q_rot_y.setRPY(0, M_PI / 2, 0);  // Yaw = 0, Pitch = 90°, Roll = 0
+    // q_result = q_orig * q_rot_y;     // 🔁 LOCAL Y rotation
+  
+    // q_result.normalize();
+    // pose.orientation = tf2::toMsg(q_result);
+
+    move_group->setPoseTarget(pose);
+
+    bool success = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+    if (success)
+    {
+      const moveit::core::LinkModel* ee_link_model =
+        move_group->getRobotModel()->getLinkModel(move_group->getEndEffectorLink());
+
+      visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
+      visual_tools->trigger();
+
+      RCLCPP_INFO(LOGGER, "Selected pose #%zu for execution", i);
+      found_valid_plan = true;
+      break;
+    }
   }
 
-  const moveit::core::LinkModel* ee_link_model =
-    move_group->getRobotModel()->getLinkModel(move_group->getEndEffectorLink());
+  if (!found_valid_plan)
+  {
+    RCLCPP_WARN(LOGGER, "No valid plan found for any pose.");
+  }
 
-  visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
-  visual_tools->trigger();
+  // RCLCPP_INFO(LOGGER, "Received pose: [%.3f, %.3f, %.3f]",
+  //             request->target_pose.position.x,
+  //             request->target_pose.position.y,
+  //             request->target_pose.position.z);
 
-  response->success = true;
-  response->message = "Planning successful";
-  return;
+  // move_group->setPoseTarget(request->target_pose);
+
+  // bool success = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+  // RCLCPP_INFO(LOGGER, "Planning result: %s", success ? "SUCCESS" : "FAILED");
+
+  // if (!success) {
+  //   response->success = false;
+  //   response->message = "Planning failed";
+  //   return;
+  // }
+
+  // const moveit::core::LinkModel* ee_link_model =
+  //   move_group->getRobotModel()->getLinkModel(move_group->getEndEffectorLink());
+
+  // visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
+  // visual_tools->trigger();
+
+  // response->success = true;
+  // response->message = "Planning successful";
+  // return;
 }
 
 void handle_trigger_request(
@@ -100,8 +147,8 @@ int main(int argc, char** argv)
   RCLCPP_INFO(LOGGER, "Planning frame: %s", move_group->getPlanningFrame().c_str());
   RCLCPP_INFO(LOGGER, "End effector link: %s", move_group->getEndEffectorLink().c_str());
 
-  auto tcp_pose_service = node->create_service<custom_srv_pkg::srv::TCPPose>(
-    "tcp_pose_service", &handleRequest);
+  auto pose_array_sub = node->create_subscription<geometry_msgs::msg::PoseArray>(
+    "/main/best_grasp_poses", 10, handleRequest);
 
   auto trigger_service = node->create_service<Trigger>(
     "my_trigger_service", handle_trigger_request);
