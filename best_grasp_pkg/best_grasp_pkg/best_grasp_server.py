@@ -66,7 +66,7 @@ class BestGraspService(Node):
         sorted_poses_array = PoseArray()
         sorted_poses_array.header.frame_id = "world"
         sorted_poses_array.poses = sorted_grasp
-        response.best_grasp_poses = sorted_poses_array
+        response.sorted_grip_poses = sorted_poses_array
 
         self.get_logger().info(f"{len(sorted_grasp)} Best grasp pose sorted and returned.")
         return response
