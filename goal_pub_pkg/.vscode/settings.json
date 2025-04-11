@@ -69,6 +69,7 @@
         "typeinfo": "cpp",
         "__nullptr": "cpp",
         "core": "cpp",
-        "__node_handle": "cpp"
+        "__node_handle": "cpp",
+        "filesystem": "cpp"
     }
 }
