@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(urdf REQUIRED)
@@ -35,6 +36,8 @@ ament_target_dependencies(colliding_links_node
   rclcpp
   moveit_ros_planning
   moveit_msgs
+  moveit_ros_planning_interface
+
 )
 
 install(TARGETS
@@ -64,6 +67,7 @@ ament_target_dependencies(ur_colliding_boxes_pub
   srdfdom
   moveit_core
   moveit_ros_planning
+  moveit_ros_planning_interface
   moveit_msgs
   custom_srv_pkg
 )
