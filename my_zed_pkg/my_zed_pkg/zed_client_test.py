@@ -55,7 +55,6 @@ def save_depth_uint16(depth_maps: np.ndarray, output_dir: str, prefix: str = "de
 
     # Save as 16-bit PNG (supports uint16)
     cv2.imwrite(path, depth_maps.astype(np.uint16))
-    # imageio.imwrite(path, depth_maps, format="PNG-FI")
 
 
 class ZedSubNode(Node):
@@ -230,7 +229,7 @@ class ZedSubNode(Node):
         """
         Capture Current Point Cloud in self.data_pointcloud
         """
-        self.save_prefix = f"{time.time_ns()}"
+        self.save_prefix = time.time_ns()
         
         self.capture_pointcloud = False
         self.capture_rgb = True

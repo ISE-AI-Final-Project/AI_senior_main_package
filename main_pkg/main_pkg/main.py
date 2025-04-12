@@ -210,11 +210,6 @@ class MainNode(Node):
         )
 
         # Finish Init
-        os.makedirs(
-            os.path.join(
-                self.get_str_param("output_path_prefix"), self.node_run_folder_name
-            )
-        )
         self.log("Main Node is Running. Ready for command.")
 
     def log(self, text):
@@ -222,10 +217,10 @@ class MainNode(Node):
         Log Text into Terminal and RViz label
         """
         # Log in terminal
-        self.get_logger().info(text)
+        self.get_logger().info(str(text))
         # Pub to RViz
         string_msg = String()
-        string_msg.data = text
+        string_msg.data = str(text)
         self.pub_rviz_text.publish(string_msg)
 
     def tlog(self, text):
@@ -233,17 +228,17 @@ class MainNode(Node):
         Log Text into Terminal only
         """
         # Log in terminal
-        self.get_logger().info(text)
+        self.get_logger().info(str(text))
 
     def elog(self, text):
         """
         Log Error Text into Terminal and RViz label
         """
         # Log in terminal
-        self.get_logger().error(text)
+        self.get_logger().error(str(text))
         # Pub to RViz
         string_msg = String()
-        string_msg.data = text
+        string_msg.data = str(text)
         self.pub_rviz_text.publish(string_msg)
 
     def is_empty(self, obj):
@@ -381,6 +376,17 @@ class MainNode(Node):
         """
         Capture Current Point Cloud in self.data_pointcloud
         """
+
+        if not os.path.exists(
+            os.path.join(
+                self.get_str_param("output_path_prefix"), self.node_run_folder_name
+            )
+        ):
+            os.makedirs(
+                os.path.join(
+                    self.get_str_param("output_path_prefix"), self.node_run_folder_name
+                )
+            )
         self.capture_folder_name = f"Cap-{self.get_current_time()}"
 
         self.capture_pointcloud = True
@@ -401,12 +407,13 @@ class MainNode(Node):
 
         # Send request
         try:
-            best_mask, best_score, combined_result = self.client_ism.request_msg(
+            target_obj = self.get_str_param("target_obj")
+            best_mask, best_box, best_score, combined_result = self.client_ism.request_msg(
                 msg_type_in=["numpyarray", "numpyarray", "string", "string"],
                 msg_in=[
                     self.data_array_rgb,
                     self.data_array_depth,
-                    self.get_str_param("target_obj"),
+                    target_obj,
                     self.get_str_param("cad_path_prefix"),
                 ],
             )
@@ -417,6 +424,21 @@ class MainNode(Node):
             self.data_msg_best_mask = image_utils.mask_to_ros_image(self.data_best_mask)
 
             # Save Image
+            # self.tlog(str(best_mask.shape))
+            # self.tlog(str(best_mask.shape))
+            # self.tlog(str(np.sum(best_mask)))
+            # self.tlog(str(best_box))
+            # self.tlog(str(np.sum(best_mask==0)))
+            # self.tlog(str(np.sum(best_mask!=0)))
+
+            # self.tlog(np.unique(best_mask,return_counts=True))
+
+            # self.tlog(str(best_mask.dtype))
+            # self.tlog(str(best_box.dtype))
+
+            # best_mask = best_mask.astype(np.uint8)
+            # best_mask[best_mask>0] = 255
+
             image_utils.save_binary_mask(
                 mask=best_mask,
                 output_dir=os.path.join(
@@ -424,16 +446,16 @@ class MainNode(Node):
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name=f"{self.req_ism_time}_best_mask",
+                file_name=f"{self.req_ism_time}_best_mask_{target_obj}",
             )
             image_utils.save_rgb_image(
-                rgb_images=combined_result,
+                rgb_image=combined_result,
                 output_dir=os.path.join(
                     self.get_str_param("output_path_prefix"),
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name=f"{self.req_ism_time}_ism_result",
+                file_name=f"{self.req_ism_time}_ism_result_{target_obj}",
             )
 
             self.pub_best_mask.publish(self.data_msg_best_mask)
@@ -469,9 +491,9 @@ class MainNode(Node):
             return
 
         request = GraspPoseSend.Request()
-        request.target_obj = (self.get_str_param("target_obj"),)
+        request.target_obj = self.get_str_param("target_obj")
 
-        request.cad_path_prefix = (self.get_str_param("cad_path_prefix"),)
+        request.cad_path_prefix = self.get_str_param("cad_path_prefix")
 
         future = self.client_all_grasp.call_async(request)
         future.add_done_callback(self.command_srv_all_grasp_response_callback)

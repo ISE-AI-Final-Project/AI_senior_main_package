@@ -17,6 +17,7 @@ def save_binary_mask(mask: np.ndarray, output_dir: str, file_name: str = "mask")
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    mask = (mask * 255).astype(np.uint8)
     # Save as PNG
     path = os.path.join(output_dir, f"{file_name}.png")
     cv2.imwrite(path, mask)
