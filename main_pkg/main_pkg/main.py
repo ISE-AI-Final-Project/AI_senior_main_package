@@ -18,15 +18,15 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from custom_srv_pkg.srv import (
+    AimGripPlan,
     BestGraspPose,
-    GoalGripPlan,
     GraspPoseSend,
     Gripper,
     IMGSend,
     PointCloudSend,
 )
 
-from .utils import image_utils, utils
+from .utils import fake_utils, image_utils, utils
 from .utils.my_custom_socket import MyClient
 
 
@@ -44,14 +44,16 @@ class MainNode(Node):
             "generate_all_grasp": self.command_srv_all_grasp,
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
-            "plan_goal": self.command_plan_goal,
-            # "trigger_goal": self.command_trigger_goal,
+            "plan_aim": self.command_plan_aim,
+            # "trigger_aim": self.command_trigger_aim,
             # "plan_grip": self.command_plan_grip,
             # "trigger_grip": self.command_trigger_grip,
             # "plan_home": self.command_plan_home,
             # "trigger_home": self.command_trigger_home,
             "gripper_open": self.command_gripper_open,
             "gripper_close": self.command_gripper_close,
+            "fake_point_cloud": self.command_fake_point_cloud,
+            "fake_object_pose": self.command_fake_object_pose,
         }
 
         """
@@ -86,11 +88,11 @@ class MainNode(Node):
         # Pose
         self.data_object_pose = PoseStamped()
         self.data_all_grasp_pose = GraspPoses()
-        self.data_sorted_grasp_goal_pose = PoseArray()
+        self.data_sorted_grasp_aim_pose = PoseArray()
         self.data_sorted_grasp_grip_pose = PoseArray()
         self.data_sorted_grasp_gripper_distance = []
 
-        self.goal_grip_passed_index = None
+        self.passed_index = None
 
         """
         ################### PARAM ###########################
@@ -176,8 +178,8 @@ class MainNode(Node):
             PoseStamped, "/main/object_pose", 10
         )
 
-        self.pub_best_grasp_goal_poses = self.create_publisher(
-            PoseArray, "/main/best_grasp_goal_poses", 10
+        self.pub_best_grasp_aim_poses = self.create_publisher(
+            PoseArray, "/main/best_grasp_aim_poses", 10
         )
 
         self.pub_best_grasp_grip_poses = self.create_publisher(
@@ -201,7 +203,7 @@ class MainNode(Node):
             PointCloudSend, "CollisionMaker"
         )
 
-        self.client_goal_grip_plan = self.create_client(GoalGripPlan, "GoalGripPlan")
+        self.client_aim_grip_plan = self.create_client(AimGripPlan, "AimGripPlan")
 
         # Socket Client
         self.client_ism = MyClient(
@@ -523,7 +525,9 @@ class MainNode(Node):
             ) = [0.5, 0.5, 0.5, -0.5]
 
             flipped_object_pose_wrt_cam = utils.chain_poses_stamped(
-                object_pose_wrt_cam, flip_x_pose, target_frame="zed_left_camera_optical_frame"
+                object_pose_wrt_cam,
+                flip_x_pose,
+                target_frame="zed_left_camera_optical_frame",
             )
 
             # Transform to world
@@ -597,12 +601,9 @@ class MainNode(Node):
         request = BestGraspPose.Request()
 
         request.all_grasp_poses = self.data_all_grasp_pose
-
         request.object_pose = self.data_object_pose
 
-        self.get_logger().info(
-            f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses."
-        )
+        self.log(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
 
         future = self.client_best_grasp.call_async(request)
         future.add_done_callback(self.command_srv_best_grasp_response_callback)
@@ -610,18 +611,26 @@ class MainNode(Node):
     def command_srv_best_grasp_response_callback(self, future):
         try:
             response = future.result()
-            self.data_sorted_grasp_goal_pose = response.sorted_goal_poses
+            self.data_sorted_grasp_aim_pose = response.sorted_aim_poses
             self.data_sorted_grasp_grip_pose = response.sorted_grip_poses
             self.data_sorted_grasp_gripper_distance = response.gripper_distance
 
-            num_passed_grasp = len(self.data_sorted_grasp_goal_pose.poses)
+            num_passed_grasp = len(self.data_sorted_grasp_aim_pose.poses)
 
             if num_passed_grasp == 0:
                 self.elog("No grasp passed criteria")
                 return
 
-            self.log(f"Received {num_passed_grasp} best goal pose.")
-            self.pub_best_grasp_goal_poses.publish(self.data_sorted_grasp_goal_pose)
+            self.log(f"Received {num_passed_grasp} best aim pose.")
+
+            for i, pose in enumerate(self.data_sorted_grasp_aim_pose.poses):
+                pos = pose.position
+                ori = pose.orientation
+                self.log(
+                    f"[{i:02d}] Position: x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f} | "
+                    f"Orientation: x={ori.x:.3f}, y={ori.y:.3f}, z={ori.z:.3f}, w={ori.w:.3f}"
+                )
+            self.pub_best_grasp_aim_poses.publish(self.data_sorted_grasp_aim_pose)
             self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
 
         except Exception as e:
@@ -650,33 +659,31 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to make collision: -> {e}")
 
-    ## CLIENT: PLAN GOAL ############################################
-    def command_plan_goal(self):
-        if not self.client_goal_grip_plan.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Goal Grip Plan not available!")
+    ## CLIENT: PLAN AIM ############################################
+    def command_plan_aim(self):
+        if not self.client_aim_grip_plan.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Aim Grip Plan not available!")
             return
-        if self.is_empty(self.data_sorted_grasp_goal_pose) or self.is_empty(
+        if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
             self.data_sorted_grasp_grip_pose
         ):
             self.log("No Best Grasp Data")
             return
 
-        request = GoalGripPlan.Request()
-        request.sorted_goal_poses = self.data_sorted_grasp_goal_pose
+        request = AimGripPlan.Request()
+        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
         request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
 
-        future = self.client_goal_grip_plan.call_async(request)
-        future.add_done_callback(self.command_plan_goal_respone_callback)
+        future = self.client_aim_grip_plan.call_async(request)
+        future.add_done_callback(self.command_plan_aim_respone_callback)
 
-    def command_plan_goal_respone_callback(self, fut):
+    def command_plan_aim_respone_callback(self, fut):
         try:
             result = fut.result()
-            self.goal_grip_passed_index = result.passed_index
-            self.log(
-                f"Plan Goal Grip Success with index: {self.goal_grip_passed_index}"
-            )
+            self.passed_index = result.passed_index
+            self.log(f"Plan Aim Grip Success with index: {self.passed_index}")
         except Exception as e:
-            self.elog(f"Failed to plan goal and grip: -> {e}")
+            self.elog(f"Failed to plan aim and grip: -> {e}")
 
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
@@ -705,6 +712,16 @@ class MainNode(Node):
     ## GRIPPER CLOSE ########################################
     def command_gripper_close(self):
         self.srv_gripper_control_send_distance(distance_mm=0)
+
+    ## FAKE POINT CLOUD ########################################
+    def command_fake_point_cloud(self):
+        self.data_pointcloud = fake_utils.get_random_pointcloud()
+        self.pub_captured_pointcloud.publish(self.data_pointcloud)
+
+    ## FAKE OBJECT POSE ########################################
+    def command_fake_object_pose(self):
+        self.data_object_pose = fake_utils.get_random_pose_stamped()
+        self.pub_object_pose.publish(self.data_object_pose)
 
 
 def main(args=None):

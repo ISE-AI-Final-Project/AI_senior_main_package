@@ -41,7 +41,7 @@ class AllGraspServer(Node):
         # Load a point cloud
 
         cad_file = os.path.join(
-            request.cad_path_prefix,
+            request.dataset_path_prefix,
             f"{request.target_obj}/{request.target_obj}_centered.ply",
         )
 
