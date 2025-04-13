@@ -64,6 +64,10 @@ class AllGraspServer(Node):
         normals = np.asarray(pcd.normals)
         points = np.asarray(pcd.points)
 
+        num_all_point = len(points)
+        center_of_mass = np.mean(points, axis=0)
+        max_d_to_com = np.max(np.linalg.norm(points - center_of_mass, axis=1))
+
         # 1. Point Cloud Grouping ##################################
         adjacent_cos_threshold = np.cos(np.radians(ADJACENT_THRESHOLD_ANGLE))
 
@@ -284,8 +288,6 @@ class AllGraspServer(Node):
             HT_in_meter[:3, 3] /= 1000
 
             # Calculate Distance to Center of mass
-            center_of_mass = np.mean(points, axis=0)
-
             d_to_com = l2_distance(center_of_mass, HT[:3, 3]) / 1000
 
             # Create Coordinate Frame for visualization
@@ -294,7 +296,7 @@ class AllGraspServer(Node):
             gripper_coordinate_frames.append(frame)
 
             print(
-                f"Contact Area : {gripper_area_score[index]}, Distance to CoM : {d_to_com}"
+                f"Contact Area : {gripper_area_score[index]}/{np.max(gripper_area_score)}, Distance to CoM : {d_to_com}/{max_d_to_com}"
             )
             print(HT_in_meter)
 
@@ -318,8 +320,12 @@ class AllGraspServer(Node):
             # Create the response message
             grasp_pose1 = GraspPose()
             grasp_pose1.ht_in_meter = pose
-            grasp_pose1.d_to_com = d_to_com
-            grasp_pose1.gripper_score = float(gripper_area_score[index])
+            grasp_pose1.d_to_com = (
+                d_to_com / max_d_to_com
+            )  # In proportion of max d to com
+            grasp_pose1.gripper_score = float(
+                gripper_area_score[index] / np.max(gripper_area_score)
+            )  # In proportion of the maximum area of grip
 
             grasp_poses_msg.grasp_poses.append(grasp_pose1)
 
