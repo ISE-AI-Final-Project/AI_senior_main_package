@@ -359,3 +359,33 @@ def pose_to_pose_stamped(pose: Pose, frame_id: str = "world", time = None) -> Po
 
 def pose_stamped_to_pose(pose_stamped: PoseStamped) -> Pose:
     return pose_stamped.pose
+
+
+def rotation_translation_to_posestamped(rotation, translation, frame_id="world"):
+    """
+    Rotation Matrix and Translation to Pose Stamped
+
+    Args:
+        rotation (np.array): 3x3 Rotation Matrix
+        transation (np.array): Translation of len 3
+        frame_id (str): frame id
+
+    Returns:
+        PoseStamped
+    """
+
+    quat = R.from_matrix(rotation).as_quat()
+
+    pose_msg = PoseStamped()
+    pose_msg.header.frame_id = frame_id
+    pose_msg.header.stamp = rclpy.clock.Clock().now().to_msg()
+
+    pose_msg.pose.position.x = translation[0]
+    pose_msg.pose.position.y = translation[1]
+    pose_msg.pose.position.z = translation[2]
+
+    pose_msg.pose.orientation.x = quat[0]
+    pose_msg.pose.orientation.y = quat[1]
+    pose_msg.pose.orientation.z = quat[2]
+    pose_msg.pose.orientation.w = quat[3]
+    return pose_msg

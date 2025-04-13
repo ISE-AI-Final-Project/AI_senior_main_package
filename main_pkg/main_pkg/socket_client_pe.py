@@ -1,15 +1,15 @@
 import cv2
-import rclpy
-from rclpy.node import Node
-from PIL import Image
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.spatial.transform import Rotation as R
 import imageio
+import matplotlib.pyplot as plt
+import numpy as np
+import rclpy
 from geometry_msgs.msg import PoseStamped
-
+from PIL import Image
+from rclpy.node import Node
+from scipy.spatial.transform import Rotation as R
 
 from .utils.my_custom_socket import MyClient
+
 
 def result_to_posestamped(res_list, node):
     if len(res_list) != 12:
@@ -40,7 +40,7 @@ def result_to_posestamped(res_list, node):
 class SocketClientNode(Node):
     def __init__(self):
         super().__init__("socket_client_node")
-        self.client = MyClient(host="127.0.0.1", port=65432)
+        self.client = MyClient(host="127.0.0.1", port=22222)
         self.timer = self.create_timer(1.0, self.timer_callback)
         self.send_once = False
 
@@ -55,9 +55,9 @@ class SocketClientNode(Node):
         
         object_name = str(input("Please input Object's name : "))
         
-        mask_path = '/home/bham/Desktop/test_scene/'+object_name+'.png'
-        rgb_path = '/home/bham/Desktop/test_scene/rgb.png'
-        depth_path = '/home/bham/Desktop/test_scene/depth.png'
+        mask_path = '/home/icetenny/senior-1/SAM-6D/SAM-6D/Data/test_scene/'+object_name+'.png'
+        rgb_path = '/home/icetenny/senior-1/SAM-6D/SAM-6D/Data/test_scene/rgb.png'
+        depth_path = '/home/icetenny/senior-1/SAM-6D/SAM-6D/Data/test_scene/depth.png'
         mask_image = Image.open(mask_path).convert("1")
         mask = np.array(mask_image, dtype=np.uint8)
 
@@ -70,8 +70,8 @@ class SocketClientNode(Node):
 
         try:
             result = self.client.request_msg(
-                msg_type_in=["image2d", "image3d", "image2d", "string"],
-                msg_in=[mask, rgb_image, depth_image, object_name])
+                msg_type_in=["image2d", "image3d", "image2d", "string", "string"],
+                msg_in=[mask, rgb_image, depth_image, object_name, "/home/icetenny/senior-2/senior_dataset/"])
             # self.get_logger().info(f"Response: {result}")
             posestamped_msg = result_to_posestamped(result, self)
             self.get_logger().info(f"\n{posestamped_msg}")

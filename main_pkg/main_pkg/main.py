@@ -3,6 +3,8 @@ from datetime import datetime
 
 import cv2
 import numpy as np
+import PIL
+import PIL.Image
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
@@ -102,16 +104,16 @@ class MainNode(Node):
             "target_obj", "sunscreen", descriptor=param_descriptor_target_object
         )
 
-        param_descriptor_cad_path_prefix = ParameterDescriptor(
-            name="cad_path_prefix",
+        param_descriptor_dataset_path_prefix = ParameterDescriptor(
+            name="dataset_path_prefix",
             type=ParameterType.PARAMETER_STRING,
-            description="Path to folder containing CAD file of object.",
+            description="Path to dataset folder containing CAD file of object and templates.",
         )
 
         self.declare_parameter(
-            "cad_path_prefix",
+            "dataset_path_prefix",
             "/home/icetenny/senior-2/senior_dataset/",
-            descriptor=param_descriptor_cad_path_prefix,
+            descriptor=param_descriptor_dataset_path_prefix,
         )
 
         param_descriptor_output_path_prefix = ParameterDescriptor(
@@ -397,48 +399,36 @@ class MainNode(Node):
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
         if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
-            self.log("No RGB or Depth Data.")
+            self.elog("No RGB or Depth Data.")
             return
 
         client_connected = self.client_ism.connect()
         if not client_connected:
-            self.elog(f"Server not started")
+            self.elog(f"Server ISM not started")
             return
 
-        # Send request
         try:
+            self.req_ism_time = self.get_current_time()
             target_obj = self.get_str_param("target_obj")
-            best_mask, best_box, best_score, combined_result = self.client_ism.request_msg(
-                msg_type_in=["numpyarray", "numpyarray", "string", "string"],
-                msg_in=[
-                    self.data_array_rgb,
-                    self.data_array_depth,
-                    target_obj,
-                    self.get_str_param("cad_path_prefix"),
-                ],
+
+            # Service Request
+            best_mask, best_box, best_score, combined_result = (
+                self.client_ism.request_msg(
+                    msg_type_in=["numpyarray", "numpyarray", "string", "string"],
+                    msg_in=[
+                        self.data_array_rgb,
+                        self.data_array_depth,
+                        target_obj,
+                        self.get_str_param("dataset_path_prefix"),
+                    ],
+                )
             )
 
-            self.req_ism_time = self.get_current_time()
-
+            # Save Best Mask
             self.data_best_mask = best_mask
             self.data_msg_best_mask = image_utils.mask_to_ros_image(self.data_best_mask)
 
             # Save Image
-            # self.tlog(str(best_mask.shape))
-            # self.tlog(str(best_mask.shape))
-            # self.tlog(str(np.sum(best_mask)))
-            # self.tlog(str(best_box))
-            # self.tlog(str(np.sum(best_mask==0)))
-            # self.tlog(str(np.sum(best_mask!=0)))
-
-            # self.tlog(np.unique(best_mask,return_counts=True))
-
-            # self.tlog(str(best_mask.dtype))
-            # self.tlog(str(best_box.dtype))
-
-            # best_mask = best_mask.astype(np.uint8)
-            # best_mask[best_mask>0] = 255
-
             image_utils.save_binary_mask(
                 mask=best_mask,
                 output_dir=os.path.join(
@@ -458,6 +448,7 @@ class MainNode(Node):
                 file_name=f"{self.req_ism_time}_ism_result_{target_obj}",
             )
 
+            # Pub
             self.pub_best_mask.publish(self.data_msg_best_mask)
 
             self.log(f"Response Received from ISM with best score: {best_score}")
@@ -465,24 +456,106 @@ class MainNode(Node):
             self.elog(f"Failed to send request: {e}")
 
         self.client_ism.disconnect()
+        self.log(f"ISM Connection Closed.")
 
     ## CLIENT: PEM ########################################
     def command_srv_req_pem(self):
-        self.log("TODO: REQ PEM")
+        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
+            self.elog("No RGB or Depth Data. Capture First")
+            return
 
-        object_pose = PoseStamped()
-        object_pose.header.frame_id = "world"
-        object_pose.pose.position.x = 0.5
-        object_pose.pose.position.y = 0.7
-        object_pose.pose.position.z = 1.2
-        object_pose.pose.orientation.x = 0.0
-        object_pose.pose.orientation.y = 0.0
-        object_pose.pose.orientation.z = 0.0
-        object_pose.pose.orientation.w = 1.0
+        if self.is_empty(self.data_best_mask):
+            self.elog("No Best Mask. Req ISM First.")
+            return
 
-        self.data_object_pose = object_pose
+        client_connected = self.client_pem.connect()
+        if not client_connected:
+            self.elog(f"Server PEM not started")
+            return
 
-        self.pub_object_pose.publish(self.data_object_pose)
+        try:
+            # TEMP
+            # mask_image = PIL.Image.open(
+            #     "/home/icetenny/senior-1/SAM-6D/SAM-6D/Data/test_scene/sunscreen.png"
+            # ).convert("1")
+            # self.data_best_mask = np.array(mask_image, dtype=np.uint8)
+
+            target_obj = self.get_str_param("target_obj")
+
+            # Service Request
+            result_rot, result_trans, result_image = self.client_pem.request_msg(
+                msg_type_in=[
+                    "numpyarray",
+                    "numpyarray",
+                    "numpyarray",
+                    "string",
+                    "string",
+                ],
+                msg_in=[
+                    self.data_best_mask,
+                    self.data_array_rgb,
+                    self.data_array_depth,
+                    target_obj,
+                    self.get_str_param("dataset_path_prefix"),
+                ],
+            )
+
+            # result_trans[-1] *= -1
+
+            # Object PoseStamped WRT Zed
+            object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
+                rotation=result_rot,
+                translation=result_trans,
+                frame_id="zed_left_camera_optical_frame",
+            )
+            # Rotate around x-axis by 180 deg
+            flip_x_pose = Pose()
+            flip_x_pose.position.x, flip_x_pose.position.y, flip_x_pose.position.z = (
+                0.0,
+                0.0,
+                0.0,
+            )
+            (
+                flip_x_pose.orientation.x,
+                flip_x_pose.orientation.y,
+                flip_x_pose.orientation.z,
+                flip_x_pose.orientation.w,
+            ) = [0.5, 0.5, 0.5, -0.5]
+
+            flipped_object_pose_wrt_cam = utils.chain_poses_stamped(
+                object_pose_wrt_cam, flip_x_pose, target_frame="zed_left_camera_optical_frame"
+            )
+
+            # Transform to world
+            self.data_object_pose = utils.transform_pose_stamped(
+                self.tf_buffer,
+                flipped_object_pose_wrt_cam,
+                current_frame="zed_left_camera_optical_frame",
+                new_frame="world",
+            )
+
+            # Save Image
+            image_utils.save_rgb_image(
+                rgb_image=result_image,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name=f"{self.req_ism_time}_pem_result_{target_obj}",
+            )
+
+            # Pub
+            self.pub_object_pose.publish(self.data_object_pose)
+
+            self.log(f"Response Received from PEM")
+
+            # self.log(f"Response Received from ISM with best score: {best_score}")
+        except Exception as e:
+            self.elog(f"Failed to send request: {e}")
+
+        self.client_pem.disconnect()
+        self.log(f"PEM Connection Closed.")
 
     ## CLIENT: ALL_GRASP ########################################
     def command_srv_all_grasp(self):
@@ -493,7 +566,7 @@ class MainNode(Node):
         request = GraspPoseSend.Request()
         request.target_obj = self.get_str_param("target_obj")
 
-        request.cad_path_prefix = self.get_str_param("cad_path_prefix")
+        request.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
 
         future = self.client_all_grasp.call_async(request)
         future.add_done_callback(self.command_srv_all_grasp_response_callback)
