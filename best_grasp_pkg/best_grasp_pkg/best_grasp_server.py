@@ -101,7 +101,6 @@ class BestGraspService(Node):
             # Distances to robot
             grip_to_base = np.linalg.norm(grip_pos - robot_base_position)
             aim_to_base = np.linalg.norm(aim_pos - robot_base_position)
-            aim_to_base = np.linalg.norm(aim_pos - robot_base_position)
 
             self.get_logger().info(f"grip_to_base = {grip_to_base}")
             self.get_logger().info(f"aim_to_base = {aim_to_base}")
@@ -120,12 +119,6 @@ class BestGraspService(Node):
             self.get_logger().info(f"gripper_score = {grasp_msg.gripper_score:.3f}")
 
             # Score: smaller grip distance + Z-down preference
-            score = (
-                0.5 * (1 - (grip_to_base)) +       # closer grip = better  range 0.15-0.5
-                0.3 * gravity_score +                      # downward Z-axis 
-                0.1 * (1 - (grasp_msg.d_to_com)) +  # closer to CoM
-                0.1 * grasp_msg.gripper_score              # gripper success prediction
-            )
             score = (
                 0.5 * (1 - (grip_to_base)) +       # closer grip = better  range 0.15-0.5
                 0.3 * gravity_score +                      # downward Z-axis 
