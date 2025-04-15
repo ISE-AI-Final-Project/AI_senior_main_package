@@ -6,6 +6,7 @@ import numpy as np
 import PIL
 import PIL.Image
 import rclpy
+import rclpy.client
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
 from moveit_msgs.msg import CollisionObject
@@ -14,6 +15,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from custom_srv_pkg.msg import GraspPose, GraspPoses
@@ -45,11 +47,11 @@ class MainNode(Node):
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
             "plan_aim": self.command_plan_aim,
-            # "trigger_aim": self.command_trigger_aim,
+            "trigger_aim": self.command_trigger_aim,
             # "plan_grip": self.command_plan_grip,
-            # "trigger_grip": self.command_trigger_grip,
+            "trigger_grip": self.command_trigger_grip,
             # "plan_home": self.command_plan_home,
-            # "trigger_home": self.command_trigger_home,
+            "trigger_home": self.command_trigger_home,
             "gripper_open": self.command_gripper_open,
             "gripper_close": self.command_gripper_close,
             "fake_point_cloud": self.command_fake_point_cloud,
@@ -205,6 +207,11 @@ class MainNode(Node):
 
         self.client_aim_grip_plan = self.create_client(AimGripPlan, "AimGripPlan")
 
+        # Trigger Client
+        self.client_trigger_aim = self.create_client(Trigger, "/aim_trigger_service")
+        self.client_trigger_grip = self.create_client(Trigger, "/grip_trigger_service")
+        self.client_trigger_home = self.create_client(Trigger, "/home_trigger_service")
+
         # Socket Client
         self.client_ism = MyClient(
             host="127.0.0.1", port=11111, client_name="Main ISM Client"
@@ -262,6 +269,10 @@ class MainNode(Node):
 
     def get_current_time(self):
         return f"{datetime.now().strftime('%H-%M-%S-%f')[:-4]}"
+    
+    def service_trigger_and_wait(self, client: rclpy.client.Client):
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(lambda res: self.log(res.result()))
 
     def command_callback(self, msg: String):
         """
@@ -685,6 +696,27 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to plan aim and grip: -> {e}")
 
+    ## CLIENT: TRIGGER AIM ############################################
+    def command_trigger_aim(self):
+        self.log("Going to AIM")
+        self.service_trigger_and_wait(self.client_trigger_aim)
+
+
+    ## CLIENT: TRIGGER GRIP ###########################################
+    def command_trigger_grip(self):
+        self.srv_gripper_control_send_distance(distance_mm=50)
+        # future = self.client_trigger_grip.call_async(Trigger.Request())
+        self.log("Going to GRIP")
+        self.service_trigger_and_wait(self.client_trigger_grip)
+
+        self.log("Gripping...")
+        self.srv_gripper_control_send_distance(distance_mm=0)
+
+    ## CLIENT: TRIGGER HOME ###########################################
+    def command_trigger_home(self):
+        self.log("Going to HOME")
+        self.service_trigger_and_wait(self.client_trigger_home)
+
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
         if not self.client_gripper_control.wait_for_service(timeout_sec=3.0):
@@ -721,6 +753,7 @@ class MainNode(Node):
     ## FAKE OBJECT POSE ########################################
     def command_fake_object_pose(self):
         self.data_object_pose = fake_utils.get_random_pose_stamped()
+        self.data_object_pose.pose.position.z += 0.8
         self.pub_object_pose.publish(self.data_object_pose)
 
 

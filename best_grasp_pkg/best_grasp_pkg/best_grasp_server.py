@@ -126,7 +126,7 @@ class BestGraspService(Node):
                 0.1 * grasp_msg.gripper_score              # gripper success prediction
             )
             self.get_logger().info(f"score = {score}")
-            grasp_candidates.append((score, grasp_grip, grasp_aim))
+            grasp_candidates.append((score, grasp_grip_end, grasp_aim_end))
 
         # Sort by score (descending)
         sorted_grasp_pair = sorted(grasp_candidates, key=lambda x: x[0], reverse=True)
