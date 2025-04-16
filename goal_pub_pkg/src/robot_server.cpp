@@ -22,6 +22,7 @@ const moveit::core::JointModelGroup* joint_model_group;
 geometry_msgs::msg::Pose successful_aim_pose;
 geometry_msgs::msg::Pose successful_grip_pose;
 bool aim_executed = false;
+bool double_plan = false;
 
 moveit::planning_interface::MoveGroupInterface::Plan my_plan;
 
@@ -33,8 +34,6 @@ std::map<std::string, double> home_joint_values = {
   {"wrist_2_joint", 0},
   {"wrist_3_joint", 0}
 };
-
-
 
 void handle_aim_grip_request(
   const std::shared_ptr<AimGripPlan::Request> request,
@@ -70,6 +69,7 @@ void handle_aim_grip_request(
     visual_tools->trigger();
 
     response->passed_index = static_cast<int8_t>(i);
+    double_plan = true;
     return;
   }
 
@@ -83,6 +83,12 @@ void handle_aim_trigger_request(
 {
   (void)req;
 
+  if (!double_plan){
+    res->success = false;
+    res->message = "Both poses are not successfully planned";
+    return;
+  }
+
   moveit::core::MoveItErrorCode exec_result = move_group->execute(my_plan);
   if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
     RCLCPP_ERROR(LOGGER, "Execution failed");
@@ -93,6 +99,7 @@ void handle_aim_trigger_request(
     res->success = true;
     res->message = "Motion executed successfully";
     aim_executed = true;
+    double_plan = false;
   }
 }
 
@@ -185,7 +192,6 @@ void handle_home_trigger_request(
   visual_tools->deleteAllMarkers();
   visual_tools->trigger();
 }
-
 
 int main(int argc, char** argv)
 {
