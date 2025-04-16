@@ -222,6 +222,9 @@ class MainNode(Node):
 
         # Finish Init
         self.log("Main Node is Running. Ready for command.")
+        self.announce_param('target_obj')
+        self.announce_param('dataset_path_prefix')
+        self.announce_param('output_path_prefix')
 
     def log(self, text):
         """
@@ -251,6 +254,9 @@ class MainNode(Node):
         string_msg = String()
         string_msg.data = str(text)
         self.pub_rviz_text.publish(string_msg)
+
+    def announce_param(self, param_name):
+        self.log(f"⚠️  Param '{param_name}' set to '{self.get_str_param(param_name)}'. Use ros2 param set or rqt to change.")
 
     def is_empty(self, obj):
         if obj is None:
