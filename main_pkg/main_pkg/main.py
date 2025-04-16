@@ -483,9 +483,9 @@ class MainNode(Node):
             self.elog("No RGB or Depth Data. Capture First")
             return
 
-        if self.is_empty(self.data_best_mask):
-            self.elog("No Best Mask. Req ISM First.")
-            return
+        # if self.is_empty(self.data_best_mask):
+        #     self.elog("No Best Mask. Req ISM First.")
+        #     return
 
         client_connected = self.client_pem.connect()
         if not client_connected:
@@ -527,30 +527,32 @@ class MainNode(Node):
                 translation=result_trans,
                 frame_id="zed_left_camera_optical_frame",
             )
-            # Rotate around x-axis by 180 deg
-            flip_x_pose = Pose()
-            flip_x_pose.position.x, flip_x_pose.position.y, flip_x_pose.position.z = (
-                0.0,
-                0.0,
-                0.0,
-            )
-            (
-                flip_x_pose.orientation.x,
-                flip_x_pose.orientation.y,
-                flip_x_pose.orientation.z,
-                flip_x_pose.orientation.w,
-            ) = [0.5, 0.5, 0.5, -0.5]
 
-            flipped_object_pose_wrt_cam = utils.chain_poses_stamped(
-                object_pose_wrt_cam,
-                flip_x_pose,
-                target_frame="zed_left_camera_optical_frame",
-            )
+            self.log(object_pose_wrt_cam)
+            # Rotate around x-axis by 180 deg
+            # flip_x_pose = Pose()
+            # flip_x_pose.position.x, flip_x_pose.position.y, flip_x_pose.position.z = (
+            #     0.0,
+            #     0.0,
+            #     0.0,
+            # )
+            # (
+            #     flip_x_pose.orientation.x,
+            #     flip_x_pose.orientation.y,
+            #     flip_x_pose.orientation.z,
+            #     flip_x_pose.orientation.w,
+            # ) = [0.5, 0.5, 0.5, -0.5]
+
+            # flipped_object_pose_wrt_cam = utils.chain_poses_stamped(
+            #     object_pose_wrt_cam,
+            #     flip_x_pose,
+            #     target_frame="zed_left_camera_optical_frame",
+            # )
 
             # Transform to world
             self.data_object_pose = utils.transform_pose_stamped(
                 self.tf_buffer,
-                flipped_object_pose_wrt_cam,
+                object_pose_wrt_cam,
                 current_frame="zed_left_camera_optical_frame",
                 new_frame="world",
             )
