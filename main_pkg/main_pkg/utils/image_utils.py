@@ -92,3 +92,8 @@ def mask_to_ros_image(mask: np.ndarray) -> Image:
     # Convert to ROS Image (mono8)
     ros_image = bridge.cv2_to_imgmsg(mask, encoding="mono8")
     return ros_image
+
+
+def rgb_to_ros_image(rgb: np.ndarray) -> Image:
+    bridge = CvBridge()
+    return bridge.cv2_to_imgmsg(rgb, encoding="8UC3")

@@ -239,6 +239,7 @@ class AllGraspServer(Node):
         possible_gripper = []
         all_gripper_geometries = []
         gripper_area_score = []
+        grip_distance_list = []
 
         print("Simulating Gripper...")
         for point1_idx, point2_idx in line_set_index:
@@ -271,6 +272,9 @@ class AllGraspServer(Node):
 
                     gripper_area_score.append(my_gripper.count_contact_area(pcd))
 
+                    grip_distance = np.sqrt(np.sum((points[point1_idx] - points[point2_idx]) ** 2))
+                    grip_distance_list.append(grip_distance)
+
         print("Number of possible Gripper:", len(possible_gripper))
 
         # Sort gripper with the highest scores ################
@@ -278,7 +282,7 @@ class AllGraspServer(Node):
         gripper_coordinate_frames = []
         grasp_poses_msg = GraspPoses()
 
-        for index in np.argsort(gripper_area_score)[:-11:-1]:
+        for index in np.argsort(gripper_area_score):
             # highest_gripper_geometries.extend(possible_gripper[index].geometries())
             highest_gripper_geometries.extend(possible_gripper[index].get_skeleton())
 
@@ -326,6 +330,7 @@ class AllGraspServer(Node):
             grasp_pose1.gripper_score = float(
                 gripper_area_score[index] / np.max(gripper_area_score)
             )  # In proportion of the maximum area of grip
+            grasp_pose1.grip_distance = float(grip_distance_list[index])
 
             grasp_poses_msg.grasp_poses.append(grasp_pose1)
 

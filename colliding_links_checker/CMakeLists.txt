@@ -75,4 +75,45 @@ ament_target_dependencies(ur_colliding_boxes_pub
 install(TARGETS ur_colliding_boxes_pub
   DESTINATION lib/${PROJECT_NAME})
 
+
+
+add_executable(planning_scene_caller src/planning_scene_caller.cpp)
+
+ament_target_dependencies(planning_scene_caller rclcpp moveit_msgs)
+
+install(TARGETS planning_scene_caller DESTINATION lib/${PROJECT_NAME})
+
+
+add_executable(planning_scene_caller_with_collision src/planning_scene_caller_with_collision.cpp)
+
+ament_target_dependencies(planning_scene_caller_with_collision
+  rclcpp
+  std_msgs
+  urdf
+  srdfdom
+  moveit_core
+  moveit_ros_planning
+  moveit_ros_planning_interface
+  moveit_msgs
+  custom_srv_pkg
+)
+install(TARGETS planning_scene_caller_with_collision DESTINATION lib/${PROJECT_NAME})
+
+
+add_executable(best_grasp_collision_filter src/best_grasp_collision_filter.cpp)
+
+ament_target_dependencies(best_grasp_collision_filter
+  rclcpp
+  std_msgs
+  urdf
+  srdfdom
+  moveit_core
+  moveit_ros_planning
+  moveit_ros_planning_interface
+  moveit_msgs
+  custom_srv_pkg
+)
+install(TARGETS best_grasp_collision_filter DESTINATION lib/${PROJECT_NAME})
+
+
 ament_package()

@@ -46,12 +46,13 @@ class MainNode(Node):
             "generate_all_grasp": self.command_srv_all_grasp,
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
-            "plan_aim": self.command_plan_aim,
+            "plan_aim_grip": self.command_plan_aim_grip,
             "trigger_aim": self.command_trigger_aim,
-            # "plan_grip": self.command_plan_grip,
             "trigger_grip": self.command_trigger_grip,
-            # "plan_home": self.command_plan_home,
+            "plan_home": self.command_plan_home,
             "trigger_home": self.command_trigger_home,
+            "attach_object": self.command_attach_object,
+            "detach_object": self.command_detach_object,
             "gripper_open": self.command_gripper_open,
             "gripper_close": self.command_gripper_close,
             "fake_point_cloud": self.command_fake_point_cloud,
@@ -83,12 +84,16 @@ class MainNode(Node):
         self.data_array_depth = np.array([])
         self.capture_depth = False
 
-        # Mask
+        # ISM Result
         self.data_best_mask = np.array([])
         self.data_msg_best_mask = Image()
 
-        # Pose
+        # PEM Result
+        self.data_pem_result = np.array([])
+        self.data_msg_pem_result = Image()
         self.data_object_pose = PoseStamped()
+
+        # Pose
         self.data_all_grasp_pose = GraspPoses()
         self.data_sorted_grasp_aim_pose = PoseArray()
         self.data_sorted_grasp_grip_pose = PoseArray()
@@ -176,6 +181,8 @@ class MainNode(Node):
 
         self.pub_best_mask = self.create_publisher(Image, "/main/best_mask", 10)
 
+        self.pub_pem_result = self.create_publisher(Image, "/main/pem_result", 10)
+
         self.pub_object_pose = self.create_publisher(
             PoseStamped, "/main/object_pose", 10
         )
@@ -206,11 +213,15 @@ class MainNode(Node):
         )
 
         self.client_aim_grip_plan = self.create_client(AimGripPlan, "AimGripPlan")
+        self.client_home_plan =self.create_client(Trigger, "home_plan_service")
 
         # Trigger Client
         self.client_trigger_aim = self.create_client(Trigger, "/aim_trigger_service")
         self.client_trigger_grip = self.create_client(Trigger, "/grip_trigger_service")
         self.client_trigger_home = self.create_client(Trigger, "/home_trigger_service")
+
+        self.client_attach = self.create_client(Trigger, 'attach_collision_object')
+        self.client_detach = self.create_client(Trigger, 'detach_collision_object')
 
         # Socket Client
         self.client_ism = MyClient(
@@ -483,9 +494,9 @@ class MainNode(Node):
             self.elog("No RGB or Depth Data. Capture First")
             return
 
-        # if self.is_empty(self.data_best_mask):
-        #     self.elog("No Best Mask. Req ISM First.")
-        #     return
+        if self.is_empty(self.data_best_mask):
+            self.elog("No Best Mask. Req ISM First.")
+            return
 
         client_connected = self.client_pem.connect()
         if not client_connected:
@@ -519,7 +530,8 @@ class MainNode(Node):
                 ],
             )
 
-            # result_trans[-1] *= -1
+            self.data_pem_result = result_image
+            self.data_msg_pem_result = image_utils.rgb_to_ros_image(self.data_pem_result)
 
             # Object PoseStamped WRT Zed
             object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
@@ -570,6 +582,7 @@ class MainNode(Node):
 
             # Pub
             self.pub_object_pose.publish(self.data_object_pose)
+            self.pub_pem_result.publish(self.data_msg_pem_result)
 
             self.log(f"Response Received from PEM")
 
@@ -678,8 +691,8 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to make collision: -> {e}")
 
-    ## CLIENT: PLAN AIM ############################################
-    def command_plan_aim(self):
+    ## CLIENT: PLAN AIM GRIP ############################################
+    def command_plan_aim_grip(self):
         if not self.client_aim_grip_plan.wait_for_service(timeout_sec=3.0):
             self.elog("Service Aim Grip Plan not available!")
             return
@@ -696,7 +709,7 @@ class MainNode(Node):
         future = self.client_aim_grip_plan.call_async(request)
         future.add_done_callback(self.command_plan_aim_respone_callback)
 
-    def command_plan_aim_respone_callback(self, fut):
+    def command_plan_aim_grip_respone_callback(self, fut):
         try:
             result = fut.result()
             self.passed_index = result.passed_index
@@ -718,12 +731,27 @@ class MainNode(Node):
         self.service_trigger_and_wait(self.client_trigger_grip)
 
         self.log("Gripping...")
-        self.srv_gripper_control_send_distance(distance_mm=0)
+        self.srv_gripper_control_send_distance(distance_mm=self.data_sorted_grasp_gripper_distance[self.passed_index])
+
+    ## CLIENT: PLAN HOME ###########################################
+    def command_plan_home(self):
+        self.log("Planning to HOME")
+        self.service_trigger_and_wait(self.client_home_plan)
 
     ## CLIENT: TRIGGER HOME ###########################################
     def command_trigger_home(self):
         self.log("Going to HOME")
         self.service_trigger_and_wait(self.client_trigger_home)
+
+    ## CLIENT: ATTACH OBJECT ###########################################
+    def command_attach_object(self):
+        self.log("Attach Object")
+        self.service_trigger_and_wait(self.client_attach)
+
+    ## CLIENT: DETACH OBJECT ###########################################
+    def command_detach_object(self):
+        self.log("Detach ObjectE")
+        self.service_trigger_and_wait(self.client_detach)
 
     ## CLIENT: GRIPPER CONTROL ########################################
     def srv_gripper_control_send_distance(self, distance_mm):
