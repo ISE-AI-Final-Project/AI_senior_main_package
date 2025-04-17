@@ -23,8 +23,11 @@ geometry_msgs::msg::Pose successful_aim_pose;
 geometry_msgs::msg::Pose successful_grip_pose;
 bool aim_executed = false;
 bool double_plan = false;
+bool home_plan = false;
 
 moveit::planning_interface::MoveGroupInterface::Plan my_plan;
+moveit::planning_interface::MoveGroupInterface::Plan home_plan_global;
+
 
 std::map<std::string, double> home_joint_values = {
   {"shoulder_pan_joint", 0},
@@ -157,27 +160,55 @@ void handle_grip_trigger_request(
   visual_tools->trigger();
 }
 
+void handle_home_plan_request(
+  const std::shared_ptr<Trigger::Request> req,
+  std::shared_ptr<Trigger::Response> res)
+{
+  (void)req;
+  RCLCPP_INFO(LOGGER, "Attempting to plan to home position (with 10s timeout)...");
+
+  move_group->setJointValueTarget(home_joint_values);
+
+  rclcpp::Time start_time = node->now();
+  rclcpp::Duration timeout = rclcpp::Duration::from_seconds(10.0);
+  bool success = false;
+
+  while ((node->now() - start_time) < timeout) {
+    if (move_group->plan(home_plan_global) == moveit::core::MoveItErrorCode::SUCCESS) {
+      success = true;
+      break;
+    }
+    rclcpp::sleep_for(std::chrono::milliseconds(200));
+  }
+
+  if (success) {
+    RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");
+    home_plan = true;
+    res->success = true;
+    res->message = "Home plan succeeded.";
+  } else {
+    RCLCPP_ERROR(LOGGER, "Failed to plan to home within 10 seconds.");
+    home_plan = false;
+    res->success = false;
+    res->message = "Home planning failed.";
+  }
+}
+
 void handle_home_trigger_request(
   const std::shared_ptr<Trigger::Request> req,
   std::shared_ptr<Trigger::Response> res)
 {
   (void)req;
 
-  RCLCPP_INFO(LOGGER, "Setting target joint values for home position...");
-
-  move_group->setJointValueTarget(home_joint_values);
-
-  moveit::planning_interface::MoveGroupInterface::Plan home_plan;
-  bool success = (move_group->plan(home_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-  if (!success) {
-    RCLCPP_ERROR(LOGGER, "Planning to home joint state failed.");
+  if (!home_plan) {
     res->success = false;
-    res->message = "Planning failed.";
+    res->message = "Home plan not available. Call home_plan_service first.";
     return;
   }
 
-  RCLCPP_INFO(LOGGER, "Planning succeeded. Executing...");
-  moveit::core::MoveItErrorCode exec_result = move_group->execute(home_plan);
+  RCLCPP_INFO(LOGGER, "Executing planned home trajectory...");
+
+  moveit::core::MoveItErrorCode exec_result = move_group->execute(home_plan_global);
   if (exec_result != moveit::core::MoveItErrorCode::SUCCESS) {
     RCLCPP_ERROR(LOGGER, "Execution to home position failed.");
     res->success = false;
@@ -191,7 +222,9 @@ void handle_home_trigger_request(
 
   visual_tools->deleteAllMarkers();
   visual_tools->trigger();
+  home_plan = false;
 }
+
 
 int main(int argc, char** argv)
 {
@@ -227,6 +260,9 @@ int main(int argc, char** argv)
   auto grip_trigger_service = node->create_service<Trigger>(
     "grip_trigger_service", handle_grip_trigger_request);
 
+  auto home_plan_service = node->create_service<Trigger>(
+    "home_plan_service", handle_home_plan_request);
+  
   auto home_trigger_service = node->create_service<Trigger>(
     "home_trigger_service", handle_home_trigger_request);
 

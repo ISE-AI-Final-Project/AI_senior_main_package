@@ -70,6 +70,7 @@
         "__nullptr": "cpp",
         "core": "cpp",
         "__node_handle": "cpp",
-        "filesystem": "cpp"
+        "filesystem": "cpp",
+        "__split_buffer": "cpp"
     }
 }

@@ -30,7 +30,7 @@ if(BUILD_TESTING)
 endif()
 
 install(PROGRAMS
-  scripts/stl_collision_loader.py
+  scripts/stl_collision_loader
   DESTINATION lib/${PROJECT_NAME}
 )
 
