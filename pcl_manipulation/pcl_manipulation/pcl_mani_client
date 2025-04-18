@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+import cv2
+
+from sensor_msgs.msg import Image, PointCloud2
+from geometry_msgs.msg import PoseStamped, Point, Quaternion
+from custom_srv_pkg.srv import PCLMani
+from cv_bridge import CvBridge
+from sensor_msgs_py import point_cloud2
+
+
+class PCLClient(Node):
+    def __init__(self):
+        super().__init__('pcl_mani_client')
+        self.cli = self.create_client(PCLMani, 'pcl_mani')
+        self.publisher_ = self.create_publisher(PointCloud2, '/colored_pointcloud', 10)
+        while not self.cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for service...')
+
+        self.bridge = CvBridge()
+
+        rgb_path = '/home/bham/Desktop/test_scene/rgb.png'
+        depth_path = '/home/bham/Desktop/test_scene/depth.png'
+        mask_path = '/home/bham/Desktop/test_scene/sunscreen.png'
+
+        rgb_img = cv2.imread(rgb_path)
+        depth_img = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+        mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
+        if rgb_img is None or depth_img is None or mask_img is None:
+            self.get_logger().error('Failed to load images')
+            return
+
+        rgb_msg = self.bridge.cv2_to_imgmsg(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), encoding='rgb8')
+        depth_msg = self.bridge.cv2_to_imgmsg(depth_img, encoding='passthrough')
+        mask_msg = self.bridge.cv2_to_imgmsg(mask_img, encoding='mono8')
+
+        pose_msg = PoseStamped()
+        pose_msg.header.frame_id = 'zed2i_cam_left'
+        pose_msg.pose.position = Point(x=0.205935, y=0.065746, z=0.899999)
+        pose_msg.pose.orientation = Quaternion(
+            x=0.6188625377367266,
+            y=0.45185944627983543,
+            z=-0.5553779490695386,
+            w=0.3230905970173876
+        )
+
+        req = PCLMani.Request()
+        req.rgb_image = rgb_msg
+        req.depth_image = depth_msg
+        req.mask_image = mask_msg
+        req.sixd_pose = pose_msg
+        req.object_name = 'sunscreen'
+
+        self.future = self.cli.call_async(req)
+        self.future.add_done_callback(self.callback)
+
+    def callback(self, future):
+        try:
+            response = future.result()
+            self.get_logger().info("Service call successful. PointCloud2 received.")
+
+            point_count = sum(1 for _ in point_cloud2.read_points(response.pointcloud, skip_nans=True))
+            self.get_logger().info(f"Number of valid points: {point_count}")
+
+            self.publisher_.publish(response.pointcloud)
+            self.get_logger().info("Published received point cloud to /colored_pointcloud")
+
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    client = PCLClient()
+    rclpy.spin(client)
+    client.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

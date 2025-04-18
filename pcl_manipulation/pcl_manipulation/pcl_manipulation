@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+
+import numpy as np
+import cv2
+import json
+import open3d as o3d
+from scipy.spatial.transform import Rotation as R
+
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+from sensor_msgs.msg import Image
+
+from std_msgs.msg import Header
+from cv_bridge import CvBridge
+from custom_srv_pkg.srv import PCLMani
+
+class PointCloudPublisher(Node):
+    def __init__(self):
+        super().__init__('pointcloud_publisher')
+        # self.publisher_ = self.create_publisher(PointCloud2, '/colored_pointcloud', 10)
+        self.srv = self.create_service(PCLMani, 'pcl_mani', self.handle_pcl_mani)
+
+        self.rgb_image = None
+        self.depth_image = None
+        self.original_mask_image = None
+        self.manipulated_mask = None
+        self.intrinsics_path = '/home/bham/Desktop/SAM-6D/SAM-6D/zed.json'
+
+        self.bridge = CvBridge()
+
+        with open(self.intrinsics_path, 'r') as f:
+            intrinsics = json.load(f)
+        self.cam_K = intrinsics["cam_K"]
+        self.get_logger().info("Service PCL Manipulation is Ready.")
+        self.get_logger().info("Listening to PCLMani service.")
+
+    def handle_pcl_mani(self, request, response):
+        self.get_logger().info("Received Service, Computing PointClouds")
+        self.rgb_image = self.bridge.imgmsg_to_cv2(request.rgb_image, desired_encoding='rgb8')
+        self.depth_image = self.bridge.imgmsg_to_cv2(request.depth_image, desired_encoding='passthrough')
+        self.original_mask_image = self.bridge.imgmsg_to_cv2(request.mask_image, desired_encoding='mono8')
+
+        pos = request.sixd_pose.pose.position
+        ori = request.sixd_pose.pose.orientation
+        self.pose = [pos.x, pos.y, pos.z, ori.x, ori.y, ori.z, ori.w]
+
+        ply_path = f'/home/bham/Downloads/ply/{request.object_name}/{request.object_name}_centered.ply'
+
+        self.manipulated_mask = self.project_model_to_mask(self.cam_K, ply_path, self.rgb_image, self.pose)
+        self.merged_mask = self.merge_and_pad_mask(self.original_mask_image, self.manipulated_mask, 0.05)
+        points, colors = self.create_pointcloud_with_mask(self.rgb_image, self.depth_image, self.merged_mask, self.cam_K)
+
+        pcl2_msg = self.convert_to_pointcloud2(points, colors)
+        response.pointcloud = pcl2_msg
+        self.get_logger().info(f"Processed and returned PCL for {request.object_name}")
+        return response
+
+    def project_model_to_mask(self, cam_K, ply_path, rgb_image, pose):
+        if isinstance(cam_K, list):
+            fx, fy = cam_K[0], cam_K[4]
+            cx, cy = cam_K[2], cam_K[5]
+        else:
+            fx, fy = cam_K[0, 0], cam_K[1, 1]
+            cx, cy = cam_K[0, 2], cam_K[1, 2]
+
+        mesh = o3d.io.read_triangle_mesh(ply_path)
+        mesh.compute_vertex_normals()
+        model_pts = np.asarray(mesh.vertices) / 1000.0
+
+        x, y, z, qx, qy, qz, qw = pose
+        rotation = R.from_quat([qx, qy, qz, qw]).as_matrix()
+        translation = np.array([x, y, z])
+
+        transformed_pts = (rotation @ model_pts.T).T + translation.reshape(1, 3)
+
+        x_ = transformed_pts[:, 0]
+        y_ = transformed_pts[:, 1]
+        z_ = transformed_pts[:, 2]
+        u = (fx * x_ / z_ + cx).astype(np.int32)
+        v = (fy * y_ / z_ + cy).astype(np.int32)
+
+        h, w = rgb_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+
+        valid = (u >= 0) & (u < w) & (v >= 0) & (v < h) & (z_ > 0)
+        u = u[valid]
+        v = v[valid]
+
+        for x_pixel, y_pixel in zip(u, v):
+            cv2.circle(mask, (x_pixel, y_pixel), radius=2, color=255, thickness=-1)
+
+        return mask
+    
+    def merge_and_pad_mask(self, original_mask, projected_mask, percentage=0.1):
+        original_bin = (original_mask > 0).astype(np.uint8) * 255
+        projected_bin = (projected_mask > 0).astype(np.uint8) * 255
+        merged_mask = cv2.bitwise_or(original_bin, projected_bin)
+
+        ys, xs = np.where(merged_mask > 0)
+        if len(xs) == 0 or len(ys) == 0:
+            return merged_mask
+
+        x_min, x_max = np.min(xs), np.max(xs)
+        y_min, y_max = np.min(ys), np.max(ys)
+        width = x_max - x_min
+        height = y_max - y_min
+
+        pad_x = max(1, int(width * percentage))
+        pad_y = max(1, int(height * percentage))
+
+        kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+        padded_mask = cv2.dilate(merged_mask, kernel, iterations=1)
+
+        return padded_mask
+
+    def create_original_pointcloud(self, rgb_image, depth_image, cam_K):
+        fx = cam_K[0]
+        fy = cam_K[4]
+        cx = cam_K[2]
+        cy = cam_K[5]
+        scale = 1000
+
+        if depth_image.dtype == np.uint16 or scale != 1.0:
+            depth_image = depth_image.astype(np.float32) / scale
+
+        height, width = depth_image.shape
+        i, j = np.meshgrid(np.arange(width), np.arange(height), indexing='xy')
+
+        z = depth_image
+        x = (i - cx) * z / fx
+        y = (j - cy) * z / fy
+
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+        colors = rgb_image.reshape(-1, 3) / 255.0
+        valid = (z > 0).reshape(-1)
+
+        return points[valid], colors[valid]
+
+    def create_pointcloud_with_mask(self, rgb_image, depth_image, mask_image, cam_K):
+        fx = cam_K[0]
+        fy = cam_K[4]
+        cx = cam_K[2]
+        cy = cam_K[5]
+        scale = 1000
+
+        ys, xs = np.where(mask_image > 0)
+        if len(xs) == 0 or len(ys) == 0:
+            self.get_logger().warn("No object found in mask. Skipping dilation.")
+        else:
+            x_min, x_max = np.min(xs), np.max(xs)
+            y_min, y_max = np.min(ys), np.max(ys)
+            width = x_max - x_min
+            height = y_max - y_min
+
+            pad_x = max(1, int(width * 0.1))
+            pad_y = max(1, int(height * 0.1))
+
+            kernel = np.ones((pad_y * 2 + 1, pad_x * 2 + 1), np.uint8)
+            mask = cv2.dilate(mask_image, kernel, iterations=1)
+
+        if depth_image.dtype == np.uint16 or scale != 1.0:
+            depth_image = depth_image.astype(np.float32) / scale
+
+        height, width = depth_image.shape
+        i, j = np.meshgrid(np.arange(width), np.arange(height), indexing='xy')
+
+        z = depth_image
+        x = (i - cx) * z / fx
+        y = (j - cy) * z / fy
+
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+        colors = rgb_image.reshape(-1, 3) / 255.0
+        mask_flat = mask.reshape(-1)
+        valid = (z > 0).reshape(-1)
+        keep = np.logical_and(valid, mask_flat == 0)
+
+        return points[keep], colors[keep]
+
+    def convert_to_pointcloud2(self, points, colors):
+        data = []
+        for pt, color in zip(points, colors):
+            r, g, b = (color * 255).astype(np.uint8)
+            rgb_packed = int(r) << 16 | int(g) << 8 | int(b)
+            data.append((*pt, rgb_packed))
+
+        fields = [
+            PointField(name='x', offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+        ]
+
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = 'zed2i_cam_left'
+
+        return point_cloud2.create_cloud(header, fields, data)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PointCloudPublisher()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
