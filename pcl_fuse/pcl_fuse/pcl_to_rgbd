@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2, Image
+from sensor_msgs_py import point_cloud2
+from cv_bridge import CvBridge
+import numpy as np
+import cv2
+import json
+
+class PCL2ToImageNode(Node):
+    def __init__(self):
+        super().__init__('cloud_to_depth')
+
+        self.bridge = CvBridge()
+        self.depth_publisher = self.create_publisher(Image, '/fused_depth', 10)
+        self.subscription = self.create_subscription(
+            PointCloud2,
+            '/fused_pointcloud',
+            self.pcl_callback,
+            10
+        )
+
+        intrinsics_path = '/home/bham/Desktop/SAM-6D/SAM-6D/zed.json'
+        with open(intrinsics_path, 'r') as f:
+            intrinsic_data = json.load(f)
+            K = intrinsic_data["cam_K"]
+            self.width = int(intrinsic_data["width"])
+            self.height = int(intrinsic_data["height"])
+
+        self.fx, self.fy = K[0], K[4]
+        self.cx, self.cy = K[2], K[5]
+
+        self.get_logger().info("Subscribed to PointCloud2 and ready.")
+
+
+    def pcl_callback(self, msg):
+        rgb_img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        depth_img = np.zeros((self.height, self.width), dtype=np.float32)
+
+        for point in point_cloud2.read_points(msg, field_names=("x", "y", "z", "rgb"), skip_nans=True):
+            x, y, z, rgb = point
+            if z <= 0:
+                continue
+
+            u = int((x * self.fx) / z + self.cx)
+            v = int((y * self.fy) / z + self.cy)
+
+            if 0 <= u < self.width and 0 <= v < self.height:
+                rgb_int = int(rgb)
+                r = (rgb_int >> 16) & 0xFF
+                g = (rgb_int >> 8) & 0xFF
+                b = rgb_int & 0xFF
+
+                if depth_img[v, u] == 0 or z < depth_img[v, u]:
+                    depth_img[v, u] = z
+                    rgb_img[v, u] = [r, g, b]
+
+        depth_msg = self.bridge.cv2_to_imgmsg((depth_img * 1000).astype(np.uint16), encoding='16UC1')
+        depth_msg.header.stamp = self.get_clock().now().to_msg()
+        depth_msg.header.frame_id = msg.header.frame_id
+        self.depth_publisher.publish(depth_msg)
+        self.get_logger().info("Published fused depth image.")
+
+def main(args=None):
+    print("Launching pcl_to_rgbd node...")
+    rclpy.init(args=args)
+    node = PCL2ToImageNode()
+    node.get_logger().info("Node started and waiting for PointCloud2...")
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
