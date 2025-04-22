@@ -116,4 +116,21 @@ ament_target_dependencies(best_grasp_collision_filter
 install(TARGETS best_grasp_collision_filter DESTINATION lib/${PROJECT_NAME})
 
 
+add_executable(robot_pose_collision_check src/robot_pose_collision_check.cpp)
+
+ament_target_dependencies(robot_pose_collision_check
+  rclcpp
+  std_msgs
+  urdf
+  srdfdom
+  moveit_core
+  moveit_ros_planning
+  moveit_ros_planning_interface
+  moveit_msgs
+  custom_srv_pkg
+)
+install(TARGETS robot_pose_collision_check DESTINATION lib/${PROJECT_NAME})
+
+
+
 ament_package()

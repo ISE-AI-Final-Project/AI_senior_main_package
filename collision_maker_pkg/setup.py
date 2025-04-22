@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'collision_server = collision_maker_pkg.collision_server:main',
             'collision_client = collision_maker_pkg.collision_client:main',
+            'collision_server_with_mask = collision_maker_pkg.collision_server_with_mask:main',
         ],
     },
 )

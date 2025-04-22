@@ -3,15 +3,17 @@ from collections import defaultdict
 import numpy as np
 import rclpy
 import sensor_msgs_py.point_cloud2 as pc2
+from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject, PlanningScene
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import Image, PointCloud2, PointField
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 
-from custom_srv_pkg.srv import PointCloudSend
+from custom_srv_pkg.srv import PointCloudSend, PointCloudSendWithMask
+from main_pkg.utils import image_utils
 
 
 class CollisionMakerService(Node):
@@ -21,9 +23,9 @@ class CollisionMakerService(Node):
             PlanningScene, "/collision_object_scene_topic", 10
         )
         self.srv = self.create_service(
-            PointCloudSend, "CollisionMaker", self.collision_maker_callback
+            PointCloudSendWithMask, "CollisionMakerWithMask", self.collision_maker_callback
         )
-        self.get_logger().info("CollisionMaker service is ready.")
+        self.get_logger().info("CollisionMakerWithMask service is ready.")
 
     def collision_maker_callback(self, request, response):
         self.get_logger().info(
@@ -32,7 +34,8 @@ class CollisionMakerService(Node):
 
         pcd = request.pointcloud
         transformed_pointcloud = self.transform_pointcloud(msg=pcd)
-        self.publish_collision_objects_from_pcd(transformed_pointcloud)
+        cropout_pointcloud = self.cropout_xyz_from_mask(transformed_pointcloud, mask_msg=request.mask)
+        self.publish_collision_objects_from_pcd(cropout_pointcloud)
         response.send_status = True
 
         return response
@@ -48,6 +51,24 @@ class CollisionMakerService(Node):
         rgb = points_msg[:, -1]
 
         return transformed_xyz
+    
+    def cropout_xyz_from_mask(self, xyz: np.array, mask_msg: Image):
+
+        # Convert mask to np array
+        mask = CvBridge().imgmsg_to_cv2(mask_msg, desired_encoding="mono8")  # shape (H, W)
+
+
+        # Apply mask (non-zero values)
+        rows, cols = np.where(mask < 1)  # (rows, cols)
+        # filtered_points = xyz[keep_indices]  # shape (N, 3)
+
+        xyz_img_array = np.array(list(xyz)).reshape(mask.shape[0], mask.shape[1], 3)  # shape (H, W, 3)
+
+        filtered_xyz = xyz_img_array[rows, cols, :]
+
+        self.get_logger().info(str(filtered_xyz) + str(xyz))
+
+        return xyz
 
     def pointcloud_xyz_to_simple_collision(
         self, points_xyz: np.array, voxel_size=0.1, max_distance=1, min_pcl_per_cube=5, base_link=np.array([0.4, 0.53, 0.8])

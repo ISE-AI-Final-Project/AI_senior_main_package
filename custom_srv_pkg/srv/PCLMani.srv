@@ -2,6 +2,8 @@ sensor_msgs/Image rgb_image
 sensor_msgs/Image depth_image
 sensor_msgs/Image mask_image
 geometry_msgs/PoseStamped sixd_pose
-string object_name
+string target_object
+string dataset_path_prefix
+sensor_msgs/CameraInfo camera_info
 ---
 sensor_msgs/PointCloud2 pointcloud

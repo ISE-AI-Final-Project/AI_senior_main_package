@@ -23,6 +23,7 @@ def generate_launch_description():
         color_log_node('all_grasp_pkg', 'grasp_server', 'all_grasp_server', '\033[36m'),  # Cyan
         color_log_node('best_grasp_pkg', 'best_grasp_server', 'best_grasp_server', '\033[38;5;87m'),  # Blue
         color_log_node('collision_maker_pkg', 'collision_server', 'collision_maker_server', '\033[38;5;208m'),  # Orange
+        color_log_node('pcl_manipulation', 'pcl_manipulation_server', 'collision_maker_with_mask_server', '\033[38;5;208m'),  # Orange
         color_log_node('colliding_links_checker', 'ur_colliding_boxes_pub', 'ur_colliding_boxes_node', '\033[38;5;208m'),  # Orange
         color_log_node('senior_gripper_control', 'gripper_control', 'gripper_control_server', '\033[38;5;93m'),  # Purple
         color_log_node('goal_pub_pkg', 'robot_server', 'robot_server', '\033[38;5;220'),  # Gold

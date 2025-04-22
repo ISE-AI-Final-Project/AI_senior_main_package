@@ -12,7 +12,7 @@ from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
 from moveit_msgs.msg import CollisionObject
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
-from sensor_msgs.msg import Image, PointCloud2
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
 from std_srvs.srv import Trigger
@@ -25,7 +25,9 @@ from custom_srv_pkg.srv import (
     GraspPoseSend,
     Gripper,
     IMGSend,
+    PCLMani,
     PointCloudSend,
+    PointCloudSendWithMask,
 )
 
 from .utils import fake_utils, image_utils, utils
@@ -46,6 +48,7 @@ class MainNode(Node):
             "generate_all_grasp": self.command_srv_all_grasp,
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
+            "make_collision_with_mask": self.command_srv_make_collision_with_mask,
             "plan_aim_grip": self.command_plan_aim_grip,
             "trigger_aim": self.command_trigger_aim,
             "trigger_grip": self.command_trigger_grip,
@@ -69,6 +72,10 @@ class MainNode(Node):
         self.capture_folder_name = f"Cap-{self.get_current_time()}"
         self.req_ism_time = self.get_current_time
 
+        # Camera info
+        self.camera_info = CameraInfo() 
+        self.capture_camera_info = False
+
         # Point Cloud
         self.data_pointcloud = PointCloud2()
         self.data_pointcloud_xyz = np.array([])
@@ -91,6 +98,7 @@ class MainNode(Node):
         # PEM Result
         self.data_pem_result = np.array([])
         self.data_msg_pem_result = Image()
+        self.data_object_pose_wrt_cam = PoseStamped()
         self.data_object_pose = PoseStamped()
 
         # Pose
@@ -164,6 +172,13 @@ class MainNode(Node):
             10,
         )
 
+        self.sub_zed_cam_K = self.create_subscription(
+            CameraInfo,
+            "/zed/zed_node/left/camera_info",
+            self.zed_camera_info_callback,
+            10,
+        )
+
         """
         ################### PUBLISHER ###########################
         """
@@ -199,6 +214,10 @@ class MainNode(Node):
         #     CollisionObject, "collision_object_topic", 10
         # )
 
+        self.pub_pointcloud_no_object = self.create_publisher(
+            PointCloud2, "/main/pointcloud_no_object", 10
+        )
+
         """
         ################### CLIENT ###########################
         """
@@ -212,16 +231,18 @@ class MainNode(Node):
             PointCloudSend, "CollisionMaker"
         )
 
+        self.client_make_collision_with_mask = self.create_client(PCLMani, 'pcl_mani')
+
         self.client_aim_grip_plan = self.create_client(AimGripPlan, "AimGripPlan")
-        self.client_home_plan =self.create_client(Trigger, "home_plan_service")
+        self.client_home_plan = self.create_client(Trigger, "home_plan_service")
 
         # Trigger Client
         self.client_trigger_aim = self.create_client(Trigger, "/aim_trigger_service")
         self.client_trigger_grip = self.create_client(Trigger, "/grip_trigger_service")
         self.client_trigger_home = self.create_client(Trigger, "/home_trigger_service")
 
-        self.client_attach = self.create_client(Trigger, 'attach_collision_object')
-        self.client_detach = self.create_client(Trigger, 'detach_collision_object')
+        self.client_attach = self.create_client(Trigger, "attach_collision_object")
+        self.client_detach = self.create_client(Trigger, "detach_collision_object")
 
         # Socket Client
         self.client_ism = MyClient(
@@ -233,9 +254,9 @@ class MainNode(Node):
 
         # Finish Init
         self.log("Main Node is Running. Ready for command.")
-        self.announce_param('target_obj')
-        self.announce_param('dataset_path_prefix')
-        self.announce_param('output_path_prefix')
+        self.announce_param("target_obj")
+        self.announce_param("dataset_path_prefix")
+        self.announce_param("output_path_prefix")
 
     def log(self, text):
         """
@@ -267,7 +288,9 @@ class MainNode(Node):
         self.pub_rviz_text.publish(string_msg)
 
     def announce_param(self, param_name):
-        self.log(f"⚠️  Param '{param_name}' set to '{self.get_str_param(param_name)}'. Use ros2 param set or rqt to change.")
+        self.log(
+            f"⚠️  Param '{param_name}' set to '{self.get_str_param(param_name)}'. Use ros2 param set or rqt to change."
+        )
 
     def is_empty(self, obj):
         if obj is None:
@@ -286,7 +309,7 @@ class MainNode(Node):
 
     def get_current_time(self):
         return f"{datetime.now().strftime('%H-%M-%S-%f')[:-4]}"
-    
+
     def service_trigger_and_wait(self, client: rclpy.client.Client):
         future = client.call_async(Trigger.Request())
         future.add_done_callback(lambda res: self.log(res.result()))
@@ -302,6 +325,10 @@ class MainNode(Node):
             self.command_map[recv_command]()
         else:
             self.get_logger().warn(f"Unknown command received: {recv_command}")
+
+    def zed_camera_info_callback(self, msg: CameraInfo):
+        if self.capture_camera_info:
+            self.camera_info = msg
 
     def zed_pointcloud_callback(self, msg: PointCloud2):
         """
@@ -367,7 +394,7 @@ class MainNode(Node):
         """
         if self.capture_depth:
             # Save msg
-            self.data_msg_depth = msg.data
+            self.data_msg_depth = msg
 
             # Convert to array
             try:
@@ -424,6 +451,7 @@ class MainNode(Node):
         self.capture_pointcloud = True
         self.capture_rgb = True
         self.capture_depth = True
+        self.capture_camera_info = True
         self.log("Ready to capture next pointcloud.")
 
     ## CLIENT: ISM ########################################
@@ -531,16 +559,18 @@ class MainNode(Node):
             )
 
             self.data_pem_result = result_image
-            self.data_msg_pem_result = image_utils.rgb_to_ros_image(self.data_pem_result)
+            self.data_msg_pem_result = image_utils.rgb_to_ros_image(
+                self.data_pem_result
+            )
 
             # Object PoseStamped WRT Zed
-            object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
+            self.data_object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
                 rotation=result_rot,
                 translation=result_trans,
                 frame_id="zed_left_camera_optical_frame",
             )
 
-            self.log(object_pose_wrt_cam)
+            self.log(self.data_object_pose_wrt_cam)
             # Rotate around x-axis by 180 deg
             # flip_x_pose = Pose()
             # flip_x_pose.position.x, flip_x_pose.position.y, flip_x_pose.position.z = (
@@ -564,7 +594,7 @@ class MainNode(Node):
             # Transform to world
             self.data_object_pose = utils.transform_pose_stamped(
                 self.tf_buffer,
-                object_pose_wrt_cam,
+                self.data_object_pose_wrt_cam,
                 current_frame="zed_left_camera_optical_frame",
                 new_frame="world",
             )
@@ -655,13 +685,13 @@ class MainNode(Node):
 
             self.log(f"Received {num_passed_grasp} best aim pose.")
 
-            for i, pose in enumerate(self.data_sorted_grasp_aim_pose.poses):
-                pos = pose.position
-                ori = pose.orientation
-                self.log(
-                    f"[{i:02d}] Position: x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f} | "
-                    f"Orientation: x={ori.x:.3f}, y={ori.y:.3f}, z={ori.z:.3f}, w={ori.w:.3f}"
-                )
+            # for i, pose in enumerate(self.data_sorted_grasp_aim_pose.poses):
+            #     pos = pose.position
+            #     ori = pose.orientation
+            #     self.log(
+            #         f"[{i:02d}] Position: x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f} | "
+            #         f"Orientation: x={ori.x:.3f}, y={ori.y:.3f}, z={ori.z:.3f}, w={ori.w:.3f}"
+            #     )
             self.pub_best_grasp_aim_poses.publish(self.data_sorted_grasp_aim_pose)
             self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
 
@@ -682,14 +712,72 @@ class MainNode(Node):
         request.pointcloud = self.data_pointcloud  # Correct field assignment
 
         future = self.client_make_collision.call_async(request)
-        future.add_done_callback(self.command_srv_make_collision_respone_callback)
+        future.add_done_callback(self.command_srv_make_collision_response_callback)
 
-    def command_srv_make_collision_respone_callback(self, fut):
+    def command_srv_make_collision_response_callback(self, fut):
         try:
             result = fut.result()
             self.log(f"Make Collision Success")
         except Exception as e:
             self.elog(f"Failed to make collision: -> {e}")
+
+    ## CLIENT: MAKE COLLISION WITH MASK #####################################
+    def command_srv_make_collision_with_mask(self):
+        if not self.client_make_collision_with_mask.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Make Collision With Mask not available!")
+            return
+
+        if self.is_empty(self.data_pointcloud):
+            self.elog("Cannot make Collision. Capture pointcloud first.")
+            return
+
+        if self.is_empty(self.data_msg_best_mask):
+            self.elog("No Best Mask. Req ISM first.")
+            return
+        
+        req = PCLMani.Request()
+        req.rgb_image = self.data_msg_rgb
+        req.depth_image = self.data_msg_depth
+        req.mask_image = self.data_msg_best_mask
+        req.sixd_pose = self.data_object_pose_wrt_cam
+        req.target_object = self.get_str_param("target_obj")
+        req.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
+        req.camera_info = self.camera_info
+
+        future = self.client_make_collision_with_mask.call_async(req)
+        future.add_done_callback(
+            self.command_srv_make_collision_with_mask_response_callback
+        )
+
+    def command_srv_make_collision_with_mask_response_callback(self, fut):
+        try:
+            result = fut.result()
+            self.log(f"Remove Target Object from Pointcloud success. Making Collision")
+
+            # Transform to world
+            tf = self.tf_buffer.lookup_transform(
+                "world",
+                result.pointcloud.header.frame_id,
+                rclpy.time.Time(),
+                rclpy.duration.Duration(seconds=0.5),
+            )
+
+            transformed_pointcloud_no_object, transformed_xyz_no_object = utils.transform_pointcloud(
+                msg=result.pointcloud, tf=tf, frame_id="world"
+            )
+
+            self.data_pointcloud_no_object = transformed_pointcloud_no_object
+
+            self.pub_pointcloud_no_object.publish(self.data_pointcloud_no_object)
+
+            request_make_collision = PointCloudSend.Request()
+            request_make_collision.pointcloud = transformed_pointcloud_no_object
+
+            future_make_collision = self.client_make_collision.call_async(request_make_collision)
+            future_make_collision.add_done_callback(self.command_srv_make_collision_response_callback)
+
+        except Exception as e:
+            self.elog(f"Failed to make collision with mask: -> {e}")
 
     ## CLIENT: PLAN AIM GRIP ############################################
     def command_plan_aim_grip(self):
@@ -707,9 +795,9 @@ class MainNode(Node):
         request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
 
         future = self.client_aim_grip_plan.call_async(request)
-        future.add_done_callback(self.command_plan_aim_respone_callback)
+        future.add_done_callback(self.command_plan_aim_grip_response_callback)
 
-    def command_plan_aim_grip_respone_callback(self, fut):
+    def command_plan_aim_grip_response_callback(self, fut):
         try:
             result = fut.result()
             self.passed_index = result.passed_index
@@ -722,7 +810,6 @@ class MainNode(Node):
         self.log("Going to AIM")
         self.service_trigger_and_wait(self.client_trigger_aim)
 
-
     ## CLIENT: TRIGGER GRIP ###########################################
     def command_trigger_grip(self):
         self.srv_gripper_control_send_distance(distance_mm=50)
@@ -731,7 +818,9 @@ class MainNode(Node):
         self.service_trigger_and_wait(self.client_trigger_grip)
 
         self.log("Gripping...")
-        self.srv_gripper_control_send_distance(distance_mm=self.data_sorted_grasp_gripper_distance[self.passed_index])
+        # self.srv_gripper_control_send_distance(
+        #     distance_mm=self.data_sorted_grasp_gripper_distance[self.passed_index]
+        # )
 
     ## CLIENT: PLAN HOME ###########################################
     def command_plan_home(self):
@@ -760,13 +849,13 @@ class MainNode(Node):
             return
 
         request = Gripper.Request()
-        request.gripper_distance = distance_mm
+        request.gripper_distance = int(distance_mm)
         future = self.client_gripper_control.call_async(request)
         future.add_done_callback(
-            self.srv_gripper_control_send_distance_respone_callback
+            self.srv_gripper_control_send_distance_response_callback
         )
 
-    def srv_gripper_control_send_distance_respone_callback(self, fut):
+    def srv_gripper_control_send_distance_response_callback(self, fut):
         try:
             result = fut.result()
             self.log(f"Sent distance Success")

@@ -31,6 +31,7 @@ endif()
 install(
   PROGRAMS
   pcl_manipulation/pcl_manipulation
+  pcl_manipulation/pcl_manipulation_server
   pcl_manipulation/pcl_mani_client
   DESTINATION lib/${PROJECT_NAME}
 )
