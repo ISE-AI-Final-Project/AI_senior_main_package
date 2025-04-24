@@ -29,6 +29,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/BestGraspPose.srv"
   "srv/AimGripPlan.srv"
   "srv/PCLMani.srv"
+  "srv/PCLFuse.srv"
   DEPENDENCIES std_msgs
   DEPENDENCIES sensor_msgs
   DEPENDENCIES geometry_msgs 

@@ -76,9 +76,13 @@ class BestGraspService(Node):
             return response
 
         aim_offset = Pose()
-        aim_offset.position.z = -0.04  # 4 cm backward
+        aim_offset.position.z = -0.08  # 4 cm backward
         gripper_offset = Pose()
         gripper_offset.position.z = -0.15
+
+
+        grip_in_offset = Pose()
+        grip_in_offset.position.z = +0.02  # 2 cm inward
 
         grasp_candidates = []
         for i, (grasp_msg, grasp_grip_end) in enumerate(transformed_grasps):
@@ -89,6 +93,9 @@ class BestGraspService(Node):
             # Position at Flange (Already offset Gripper)
             grasp_aim = chain_poses(gripper_offset, grasp_aim_end)
             grasp_grip = chain_poses(gripper_offset, grasp_grip_end)
+            
+            # Offset inward by 2cm
+            grasp_grip_end_in = chain_poses(grip_in_offset, grasp_grip_end)
 
             # Positions
             grip_pos = np.array(
@@ -133,7 +140,7 @@ class BestGraspService(Node):
             )
             self.get_logger().info(f"score = {score}")
             grasp_candidates.append(
-                (score, grasp_grip_end, grasp_aim_end, grasp_msg.grip_distance)
+                (score, grasp_grip_end_in, grasp_aim_end, grasp_msg.grip_distance)
             )
 
         # Sort by score (descending)

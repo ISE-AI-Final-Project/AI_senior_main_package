@@ -245,16 +245,17 @@ class AllGraspServer(Node):
         for point1_idx, point2_idx in line_set_index:
 
             for y_angle in range(0, 360, 20):
+                # Hand E
                 my_gripper = MyGripperWithContact(
                     hand_width=25,
                     hand_thickness=14,
-                    hand_length=55,
+                    hand_length=35,
                     gripper_min_d=0,
-                    gripper_max_d=120,
+                    gripper_max_d=50,
                     back_thickness=40,
                     back_width=60,
                     back_height=60,
-                    contact_thickness=4,
+                    contact_thickness=3,
                     skeleton_radius=1,
                 )
 

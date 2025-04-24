@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+
+import cv2
+import numpy as np
+import rclpy
+from cv_bridge import CvBridge
+from rclpy.node import Node
+from scipy.ndimage import generic_filter
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from sensor_msgs_py import point_cloud2
+
+from custom_srv_pkg.srv import PCLFuse
+
+
+def fill_with_strict_min(depth, kernel=7):
+    def strict_min(values):
+        center = values[len(values) // 2]
+        neighbors = np.delete(values, len(values) // 2)  # remove center
+        non_zero_neighbors = neighbors[neighbors > 0]
+
+        if center != 0 or len(non_zero_neighbors) == 0:
+            return center  # keep existing value if not zero or no valid neighbors
+
+        return np.min(non_zero_neighbors)
+
+    # Apply strict min filter
+    filled_depth = generic_filter(
+        depth,
+        function=strict_min,
+        size=(kernel * 2 + 1, kernel * 2 + 1),
+        mode="constant",
+        cval=0,
+    )
+
+    return filled_depth
+
+
+class PCLFuseService(Node):
+    def __init__(self):
+        super().__init__("pcl_fuse_server")
+
+        self.bridge = CvBridge()
+        self.srv = self.create_service(PCLFuse, "pcl_fuse", self.pcl_fuse_callback)
+        self.get_logger().info("PCL Fuser service is ready.")
+
+    def pcl_fuse_callback(self, request, response):
+        cloud = request.pointcloud
+        cam_info = request.camera_info
+
+        width = cam_info.width
+        height = cam_info.height
+        K = cam_info.k
+        fx, fy = K[0], K[4]
+        cx, cy = K[2], K[5]
+
+        print(cloud.width, cloud.height)
+
+        # rgb_img = np.zeros((height, width, 3), dtype=np.uint8)
+        depth_img = np.zeros((height, width), dtype=np.float32)
+        pcl_array = point_cloud2.read_points_numpy(
+            cloud, field_names=("x", "y", "z", "rgb"), skip_nans=False
+        )
+        # Count rows where all values are NaN
+        all_nan_rows = np.all(np.isnan(pcl_array), axis=1)
+        num_all_nan = np.sum(all_nan_rows)
+        # Count rows where only the last column is NaN, and others are not
+        last_col_nan = np.isnan(pcl_array[:, 3])
+        rest_not_nan = np.all(~np.isnan(pcl_array[:, :3]), axis=1)
+        last_only_nan = last_col_nan & rest_not_nan
+        num_last_only_nan = np.sum(last_only_nan)
+
+        print("All values NaN:", num_all_nan)
+        print("Only last column NaN:", num_last_only_nan)
+        for point in pcl_array:
+            x, y, z, rgb = point
+            if np.any(np.isnan([x, y, z])):
+                continue
+            if z <= 0:
+                continue
+
+            u = int(round((x * fx) / z + cx))
+            v = int(round((y * fy) / z + cy))
+            # print(u,v,x,z,fx,cx)
+
+            if 0 <= u < width and 0 <= v < height:
+                # rgb_int = int(rgb)
+                # r = (rgb_int >> 16) & 0xFF
+                # g = (rgb_int >> 8) & 0xFF
+                # b = rgb_int & 0xFF
+
+                if depth_img[v, u] == 0 or z < depth_img[v, u]:
+                    depth_img[v, u] = z
+                    # rgb_img[v, u] = [r, g, b]
+
+        # print(depth_img)
+        print(f"Num PCL: {len(pcl_array)}")
+        print(f"Non-zero : {np.sum(depth_img > 0)}, Total : {np.sum(depth_img > -999)}")
+
+        filled_depth_msg = fill_with_strict_min(depth_img, kernel=7)
+        # depth_msg = self.bridge.cv2_to_imgmsg((depth_img * 1000).astype(np.uint16), encoding='16UC1')
+        depth_msg = self.bridge.cv2_to_imgmsg(filled_depth_msg, encoding="32FC1")
+
+        depth_msg.header.stamp = self.get_clock().now().to_msg()
+        depth_msg.header.frame_id = cloud.header.frame_id
+        response.depth_image = depth_msg
+        self.get_logger().info(f"Processed fused depth.")
+
+        return response
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PCLFuseService()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

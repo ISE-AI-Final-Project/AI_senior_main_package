@@ -32,6 +32,9 @@ endif()
 install(PROGRAMS
   pcl_fuse/pcl_publisher
   pcl_fuse/pcl_to_rgbd
+  pcl_fuse/pcl_to_depth_server
+  pcl_fuse/pcl_to_depth_min_server
+  pcl_fuse/pcl_fuser
   DESTINATION lib/${PROJECT_NAME}
 )
 

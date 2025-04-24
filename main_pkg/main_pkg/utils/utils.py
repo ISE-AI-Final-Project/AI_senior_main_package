@@ -32,7 +32,7 @@ def transform_pointcloud(msg: PointCloud2, tf, frame_id="world") -> PointCloud2:
 
     # Read points (x, y, z, rgb)
     points_msg = pc2.read_points_numpy(
-        msg, field_names=("x", "y", "z", "rgb"), skip_nans=True
+        msg, field_names=("x", "y", "z", "rgb"), skip_nans=False
     )
 
     # Homogeneous coordinates
@@ -128,6 +128,26 @@ def pointcloud_xyz_to_simple_collision(
     print(len(cubes))
 
     return cubes
+
+
+def combine_pointclouds(pcl1: PointCloud2, pcl2: PointCloud2) -> PointCloud2:
+    """
+    Combine 2 PointCloud2 into one.
+    """
+    # Convert to list of points (as tuples)
+    points1 = list(pc2.read_points(pcl1, skip_nans=False))
+    points2 = list(pc2.read_points(pcl2, skip_nans=False))
+
+    # Concatenate both point lists
+    combined_points = points1 + points2
+
+    # Use the field definition from one of them (assuming same fields)
+    fields = pcl1.fields
+    header = pcl2.header
+
+    # Rebuild PointCloud2
+    combined_pc = pc2.create_cloud(header, fields, combined_points)
+    return combined_pc
 
 
 def transform_pose_stamped(
@@ -257,6 +277,7 @@ def transform_pose(
 
     return transformed
 
+
 def chain_poses(
     pose_obj_wrt_frame1: Pose | PoseStamped,
     pose_frame1_wrt_frame2: Pose | PoseStamped,
@@ -283,7 +304,12 @@ def chain_poses(
     def pose_to_matrix(pose: Pose) -> np.ndarray:
         T = np.eye(4)
         trans = [pose.position.x, pose.position.y, pose.position.z]
-        rot = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+        rot = [
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+        ]
         T[:3, :3] = R.from_quat(rot).as_matrix()
         T[:3, 3] = trans
         return T
@@ -344,18 +370,19 @@ def chain_poses_stamped(
         pose_stamped_out.header.stamp = pose_frame1_wrt_frame2.header.stamp
     else:
         pose_stamped_out.header.stamp = rclpy.clock.Clock().now().to_msg()
-        
+
     pose_stamped_out.pose = transformed_pose
 
     return pose_stamped_out
 
 
-def pose_to_pose_stamped(pose: Pose, frame_id: str = "world", time = None) -> PoseStamped:
+def pose_to_pose_stamped(pose: Pose, frame_id: str = "world", time=None) -> PoseStamped:
     pose_stamped = PoseStamped()
     pose_stamped.pose = pose
     pose_stamped.header.frame_id = frame_id
     pose_stamped.header.stamp = time if time is not None else rclpy.time.Time().to_msg()
     return pose_stamped
+
 
 def pose_stamped_to_pose(pose_stamped: PoseStamped) -> Pose:
     return pose_stamped.pose

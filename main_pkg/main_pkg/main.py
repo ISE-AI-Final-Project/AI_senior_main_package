@@ -25,6 +25,7 @@ from custom_srv_pkg.srv import (
     GraspPoseSend,
     Gripper,
     IMGSend,
+    PCLFuse,
     PCLMani,
     PointCloudSend,
     PointCloudSendWithMask,
@@ -43,6 +44,7 @@ class MainNode(Node):
 
         self.command_map = {
             "capture": self.command_capture,
+            "capture_to_fuse": self.command_capture_to_fuse,
             "req_ism": self.command_srv_req_ism,
             "req_pem": self.command_srv_req_pem,
             "generate_all_grasp": self.command_srv_all_grasp,
@@ -60,6 +62,8 @@ class MainNode(Node):
             "gripper_close": self.command_gripper_close,
             "fake_point_cloud": self.command_fake_point_cloud,
             "fake_object_pose": self.command_fake_object_pose,
+            "fuse_pointcloud": self.command_fuse_pointcloud,
+            "clear_pointcloud": self.command_clear_pointcloud,
         }
 
         """
@@ -73,13 +77,16 @@ class MainNode(Node):
         self.req_ism_time = self.get_current_time
 
         # Camera info
-        self.camera_info = CameraInfo() 
+        self.camera_info = CameraInfo()
         self.capture_camera_info = False
 
         # Point Cloud
         self.data_pointcloud = PointCloud2()
         self.data_pointcloud_xyz = np.array([])
         self.capture_pointcloud = False
+
+        self.capture_to_fuse = False
+        self.data_pointcloud_fused = PointCloud2()
 
         # RGB
         self.data_msg_rgb = Image()
@@ -218,6 +225,14 @@ class MainNode(Node):
             PointCloud2, "/main/pointcloud_no_object", 10
         )
 
+        self.pub_fused_pointcloud = self.create_publisher(
+            PointCloud2, "/main/fused_pointcloud", 10
+        )
+
+        self.pub_pointcloud_raw = self.create_publisher(
+            PointCloud2, "/main/pointcloud_raw", 10
+        )
+
         """
         ################### CLIENT ###########################
         """
@@ -231,7 +246,7 @@ class MainNode(Node):
             PointCloudSend, "CollisionMaker"
         )
 
-        self.client_make_collision_with_mask = self.create_client(PCLMani, 'pcl_mani')
+        self.client_make_collision_with_mask = self.create_client(PCLMani, "pcl_mani")
 
         self.client_aim_grip_plan = self.create_client(AimGripPlan, "AimGripPlan")
         self.client_home_plan = self.create_client(Trigger, "home_plan_service")
@@ -243,6 +258,8 @@ class MainNode(Node):
 
         self.client_attach = self.create_client(Trigger, "attach_collision_object")
         self.client_detach = self.create_client(Trigger, "detach_collision_object")
+
+        self.client_fuse_pointcloud = self.create_client(PCLFuse, "pcl_fuse")
 
         # Socket Client
         self.client_ism = MyClient(
@@ -357,6 +374,23 @@ class MainNode(Node):
             self.capture_pointcloud = False
             self.log("Captured and saved pointcloud.")
 
+            self.log(self.data_pointcloud.width)
+
+            if self.capture_to_fuse:
+                # Fuse Pointcloud
+                if self.is_empty(self.data_pointcloud_fused):
+                    self.data_pointcloud_fused = self.data_pointcloud
+                else:
+                    self.data_pointcloud_fused = utils.combine_pointclouds(
+                        self.data_pointcloud_fused, self.data_pointcloud
+                    )
+
+                self.pub_fused_pointcloud.publish(self.data_pointcloud_fused)
+                self.log(f"Fuse PointCloud, current width {self.data_pointcloud_fused.width}")
+
+                self.capture_to_fuse = False
+
+
     def zed_rgb_callback(self, msg: Image):
         """
         Save RGB only when commanded.
@@ -453,6 +487,10 @@ class MainNode(Node):
         self.capture_depth = True
         self.capture_camera_info = True
         self.log("Ready to capture next pointcloud.")
+
+    def command_capture_to_fuse(self):
+        self.capture_to_fuse = True
+        self.command_capture()
 
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
@@ -734,7 +772,7 @@ class MainNode(Node):
         if self.is_empty(self.data_msg_best_mask):
             self.elog("No Best Mask. Req ISM first.")
             return
-        
+
         req = PCLMani.Request()
         req.rgb_image = self.data_msg_rgb
         req.depth_image = self.data_msg_depth
@@ -762,8 +800,10 @@ class MainNode(Node):
                 rclpy.duration.Duration(seconds=0.5),
             )
 
-            transformed_pointcloud_no_object, transformed_xyz_no_object = utils.transform_pointcloud(
-                msg=result.pointcloud, tf=tf, frame_id="world"
+            transformed_pointcloud_no_object, transformed_xyz_no_object = (
+                utils.transform_pointcloud(
+                    msg=result.pointcloud, tf=tf, frame_id="world"
+                )
             )
 
             self.data_pointcloud_no_object = transformed_pointcloud_no_object
@@ -773,8 +813,12 @@ class MainNode(Node):
             request_make_collision = PointCloudSend.Request()
             request_make_collision.pointcloud = transformed_pointcloud_no_object
 
-            future_make_collision = self.client_make_collision.call_async(request_make_collision)
-            future_make_collision.add_done_callback(self.command_srv_make_collision_response_callback)
+            future_make_collision = self.client_make_collision.call_async(
+                request_make_collision
+            )
+            future_make_collision.add_done_callback(
+                self.command_srv_make_collision_response_callback
+            )
 
         except Exception as e:
             self.elog(f"Failed to make collision with mask: -> {e}")
@@ -880,6 +924,84 @@ class MainNode(Node):
         self.data_object_pose = fake_utils.get_random_pose_stamped()
         self.data_object_pose.pose.position.z += 0.8
         self.pub_object_pose.publish(self.data_object_pose)
+
+    ## CLIENT: FUSE POINTCLOUD ########################################
+    def command_fuse_pointcloud(self):
+        if not self.client_fuse_pointcloud.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Fuse Pointcloud not available!")
+            return
+
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                "zed_left_camera_optical_frame",
+                "world",
+                rclpy.time.Time(),
+                rclpy.duration.Duration(seconds=0.5),
+            )
+        except TransformException as ex:
+            self.log(f"Could not get transform for point cloud: {ex}")
+            return
+
+        transformed_pointcloud_fused, _ = utils.transform_pointcloud(
+            msg=self.data_pointcloud_fused, tf=tf, frame_id="zed_left_camera_optical_frame"
+        )
+
+        self.pub_pointcloud_raw.publish(transformed_pointcloud_fused)
+
+
+        request = PCLFuse.Request()
+        request.pointcloud = transformed_pointcloud_fused
+        request.camera_info = self.camera_info
+        future = self.client_fuse_pointcloud.call_async(request)
+        future.add_done_callback(self.command_fuse_pointcloud_response_callback)
+
+    def command_fuse_pointcloud_response_callback(self, fut):
+        try:
+            result = fut.result()
+            self.log(f"Fuse Pointcloud Success")
+
+            # Convert to array
+            try:
+                array_depth_m = self.bridge.imgmsg_to_cv2(
+                    result.depth_image, desired_encoding="32FC1"
+                )
+            except Exception as e:
+                self.elog(f"CVBridge error: {e}")
+                return
+
+            # Replace NaNs with 0
+            array_depth_m = np.nan_to_num(
+                array_depth_m, nan=0.0, posinf=0.0, neginf=0.0
+            )
+
+            # SClip values to range 10m
+            array_depth_m = np.clip(array_depth_m, 0.0, 10.0)
+
+            # Convert to mm
+            array_depth_mm = (array_depth_m * 1000).astype(np.int32)
+
+            # Save Image
+            image_utils.save_depth_uint16(
+                depth_maps=array_depth_mm,
+                output_dir=os.path.join(
+                    self.get_str_param("output_path_prefix"),
+                    self.node_run_folder_name,
+                    self.capture_folder_name,
+                ),
+                file_name="depth_fused",
+            )
+            self.data_array_depth = array_depth_mm
+            self.data_msg_depth = result.depth_image
+
+        except Exception as e:
+            self.elog(f"Failed to send distance: -> {e}")
+
+    ## CLEAR POINTCLOUD
+
+    def command_clear_pointcloud(self):
+        self.data_pointcloud_fused = PointCloud2()
+
+
 
 
 def main(args=None):
