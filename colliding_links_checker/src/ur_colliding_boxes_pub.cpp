@@ -115,7 +115,7 @@ private:
     collision_detection::CollisionRequest collision_request;
     collision_detection::CollisionResult collision_result;
     collision_request.contacts = true;
-    collision_request.max_contacts = 1000;
+    collision_request.max_contacts = 30000;
     collision_request.max_contacts_per_pair = 10;
 
     planning_scene_->checkCollision(collision_request, collision_result);
@@ -130,15 +130,24 @@ private:
         const std::string &link1 = contact_pair.first.first;
         const std::string &link2 = contact_pair.first.second;
 
-        RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s", link1.c_str(), link2.c_str());
-
         bool is_link1_robot = robot_model_->hasLinkModel(link1);
         bool is_link2_robot = robot_model_->hasLinkModel(link2);
 
-        if (is_link1_robot && !is_link2_robot && link1 != "table")
+        // if (is_link1_robot && !is_link2_robot && link1 != "table")
+        //   removal_ids.insert(link2);
+        // else if (is_link2_robot && !is_link1_robot && link2 != "table")
+        //   removal_ids.insert(link1);
+
+        if (is_link1_robot && !is_link2_robot)
+        {
           removal_ids.insert(link2);
-        else if (is_link2_robot && !is_link1_robot && link2 != "table")
+          RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link2.c_str());
+        }
+        else if (is_link2_robot && !is_link1_robot)
+        {
           removal_ids.insert(link1);
+          RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link1.c_str());
+        }
       }
     }
     else

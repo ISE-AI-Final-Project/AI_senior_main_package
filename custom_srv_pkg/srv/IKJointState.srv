@@ -1,0 +1,6 @@
+geometry_msgs/PoseArray sorted_aim_poses # Aim Poses before grip, sorted by scores
+geometry_msgs/PoseArray sorted_grip_poses # Grip Poses sort by scores
+float32[] gripper_distance
+---
+sensor_msgs/JointState[] possible_aim_joint_state
+float32[] gripper_distance

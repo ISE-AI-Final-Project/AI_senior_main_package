@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'pos_endeffector'
+package_name = 'kinematic_pkg'
 
 setup(
     name=package_name,
@@ -13,14 +13,18 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='tunyaluck',
-    maintainer_email='85739324+Tunyalucklie@users.noreply.github.com',
+    maintainer='icetenny',
+    maintainer_email='ice.tennison@gmail.com',
     description='TODO: Package description',
-    license='Apache-2.0',
+    license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': ['endeffector_pubsub = pos_endeffector.pos_endeffector_pub:main',
-                            'joint_pos = pos_endeffector.joint_pos:main',
+        'console_scripts': [
+            'endeffector_pubsub = kinematic_pkg.pos_endeffector_pub:main',
+            'joint_pos = kinematic_pkg.joint_pos:main',
+            'ik = kinematic_pkg.ik:main',
+            'ik_joint_pub = kinematic_pkg.ik_joint_pub:main',
+            'ik_server = kinematic_pkg.ik_server:main',
         ],
     },
 )

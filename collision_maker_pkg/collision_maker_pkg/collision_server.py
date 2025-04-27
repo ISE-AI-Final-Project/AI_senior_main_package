@@ -40,14 +40,16 @@ class CollisionMakerService(Node):
     def transform_pointcloud(self, msg: PointCloud2) -> PointCloud2:
         # Read points (x, y, z, rgb)
         points_msg = pc2.read_points_numpy(
-            msg, field_names=("x", "y", "z", "rgb"), skip_nans=True
+            msg, field_names=("x", "y", "z", "rgb"), skip_nans=False
         )
 
         # Extract xyz and rgb
         transformed_xyz = points_msg[:, :3]
-        rgb = points_msg[:, -1]
+        transformed_xyz_no_nan = transformed_xyz[~np.isnan(transformed_xyz).any(axis=1)]
 
-        return transformed_xyz
+        # rgb = points_msg[:, -1]
+
+        return transformed_xyz_no_nan
 
     def pointcloud_xyz_to_simple_collision(
         self, points_xyz: np.array, voxel_size=0.1, max_distance=1, min_pcl_per_cube=5, base_link=np.array([0.4, 0.53, 0.8])
@@ -112,7 +114,7 @@ class CollisionMakerService(Node):
     def publish_collision_objects_from_pcd(self, pcd):
         # collision_objects_data = self.process_pointcloud_to_boxes(pcd)
 
-        VOXEL_SIZE = 0.01
+        VOXEL_SIZE = 0.05
 
         # Create a PlanningScene message and mark it as a diff
         planning_scene = PlanningScene()
@@ -121,7 +123,7 @@ class CollisionMakerService(Node):
             pcd,
             max_distance=0.75,
             voxel_size=VOXEL_SIZE,
-            min_pcl_per_cube=3,
+            min_pcl_per_cube=5,
         )
 
         # Aggregate collision objects

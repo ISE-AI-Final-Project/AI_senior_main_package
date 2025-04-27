@@ -1,0 +1,5 @@
+sensor_msgs/JointState[] joint_state
+float32[] gripper_distance
+---
+sensor_msgs/JointState[] possible_joint_state
+float32[] gripper_distance

@@ -24,6 +24,7 @@ from custom_srv_pkg.srv import (
     BestGraspPose,
     GraspPoseSend,
     Gripper,
+    IKJointState,
     IMGSend,
     PCLFuse,
     PCLMani,
@@ -51,6 +52,7 @@ class MainNode(Node):
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
             "make_collision_with_mask": self.command_srv_make_collision_with_mask,
+            "ik_grasp": self.command_ik_grasp,
             "plan_aim_grip": self.command_plan_aim_grip,
             "trigger_aim": self.command_trigger_aim,
             "trigger_grip": self.command_trigger_grip,
@@ -245,6 +247,8 @@ class MainNode(Node):
         self.client_make_collision = self.create_client(
             PointCloudSend, "CollisionMaker"
         )
+
+        self.client_ik_grasp = self.create_client(IKJointState, "joint_state_from_ik")
 
         self.client_make_collision_with_mask = self.create_client(PCLMani, "pcl_mani")
 
@@ -822,6 +826,34 @@ class MainNode(Node):
 
         except Exception as e:
             self.elog(f"Failed to make collision with mask: -> {e}")
+
+
+    ## CLIENT: IK GRASP #################################################
+    def command_ik_grasp(self):
+        if not self.client_ik_grasp.wait_for_service(timeout_sec=3.0):
+            self.elog("Service IK Grasp not available!")
+            return
+        if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
+            self.data_sorted_grasp_grip_pose
+        ):
+            self.log("No Best Grasp Data")
+            return
+        request = IKJointState.Request()
+        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
+        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
+        request.gripper_distance = self.data_sorted_grasp_gripper_distance
+
+        future = self.client_ik_grasp.call_async(request)
+        future.add_done_callback(self.command_ik_grasp_response_callback)
+
+    def command_ik_grasp_response_callback(self, fut):
+        try:
+            result = fut.result()
+            self.log(f"Num Possible Joint state: {len(result.possible_aim_joint_state)}")
+            self.log(f"Possible Joint state: {result.possible_aim_joint_state}")
+        except Exception as e:
+            self.elog(f"Failed to get joint state from IK: -> {e}")
+
 
     ## CLIENT: PLAN AIM GRIP ############################################
     def command_plan_aim_grip(self):

@@ -1,25 +1,29 @@
+import numpy as np
 import rclpy
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import Pose
-import numpy as np
+
+from main_pkg.utils import utils
+
 
 class UR3eFKNode(Node):
     def __init__(self):
         super().__init__('ur3e_fk_from_joint_states')
         self.joint_sub = self.create_subscription(JointState, '/joint_states', self.joint_callback, 10)
-        self.pose_pub = self.create_publisher(Pose, 'end_effector_pose_from_joints', 10)
+        self.pose_pub = self.create_publisher(PoseStamped, 'end_effector_pose_from_joints', 10)
+        self.joint_pose_pub = self.create_publisher(PoseArray, 'joint_pose_from_joints', 10)
         self.get_logger().info("UR3e FK Node initialized")
 
         # UR3e standard DH parameters (a, alpha, d, theta_offset)
         self.dh_params = [
-            (0.0,        np.pi/2,  0.1519,  0.0),    # Base to Shoulder (shoulder_pan_joint)
-            (-0.24365,   0.0,      0.0,     0.0),    # Shoulder to Elbow (shoulder_lift_joint)
-            (-0.21325,   0.0,      0.0,     0.0),    # Elbow to Wrist1 (elbow_joint)
-            (0.0,        np.pi/2,  0.11235, 0.0),    # Wrist1 to Wrist2 (wrist_1_joint)
-            (0.0,       -np.pi/2,  0.08535, 0.0),    # Wrist2 to Wrist3 (wrist_2_joint)
-            (0.0,        0.0,      0.0819,  0.0),     # Wrist3 to tool0 (wrist_3_joint)
-            (0.0,        0.0,      0.15695, 0.0)      # tool0 to end effector modify offset hhere!!!
+            (0.0,        np.pi/2,  0.15185,  0.0    ),    # Base to Shoulder (shoulder_pan_joint)
+            (-0.24355,   0.0,      0.0,      0.0    ),    # Shoulder to Elbow (shoulder_lift_joint)
+            (-0.2132,    0.0,      0.0,      0.0    ),    # Elbow to Wrist1 (elbow_joint)
+            (0.0,        np.pi/2,  0.13105,  0.0    ),    # Wrist1 to Wrist2 (wrist_1_joint)
+            (0.0,       -np.pi/2,  0.08535,  0.0    ),    # Wrist2 to Wrist3 (wrist_2_joint)
+            (0.0,        0.0,      0.0921,   0.0    ),    # Wrist3 to tool0 (wrist_3_joint)
+            (0.0,        0.0,      0.15695, -np.pi/2)     # tool0 to end effector!!!
         ]
 
     def dh_matrix(self, a, alpha, d, theta):
@@ -49,6 +53,8 @@ class UR3eFKNode(Node):
             return
 
         # Compute full transform
+        joint_pose_array = PoseArray()
+        joint_pose_array.header.frame_id = "base"
         T = np.eye(4)
         for i in range(7):
             a, alpha, d, theta_offset = self.dh_params[i]
@@ -56,19 +62,15 @@ class UR3eFKNode(Node):
             T_i = self.dh_matrix(a, alpha, d, theta)
             T = T @ T_i
 
-        # Extract position and orientation (quaternion)
-        position = T[0:3, 3]
-        R = T[0:3, 0:3]
-        quat = self.rotation_matrix_to_quaternion(R)
+            joint_pose_array.poses.append( utils.ht_to_posestamped(T, frame_id="base").pose)
 
-        # Publish
-        pose = Pose()
-        pose.position.x, pose.position.y, pose.position.z = position
-        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = quat
-        self.pose_pub.publish(pose)
+        # Extract position and orientation (quaternion)
+        end_pose = utils.ht_to_posestamped(T, frame_id="base")
+        self.pose_pub.publish(end_pose)
+        self.joint_pose_pub.publish(joint_pose_array)
 
         self.get_logger().info(
-            f"\nEnd-effector position:\n  x = {position[0]:.4f}, y = {position[1]:.4f}, z = {position[2]:.4f}\n"
+            f"\nEnd-effector position:\n  x = {end_pose.pose.position.x:.4f}, y = {end_pose.pose.position.y:.4f}, z = {end_pose.pose.position.z:.4f}\n"
         )
         self.print_dh_table(joint_angles)
 

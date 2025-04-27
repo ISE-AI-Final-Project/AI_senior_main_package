@@ -416,3 +416,143 @@ def rotation_translation_to_posestamped(rotation, translation, frame_id="world")
     pose_msg.pose.orientation.z = quat[2]
     pose_msg.pose.orientation.w = quat[3]
     return pose_msg
+
+
+def rotation_matrix_to_quaternion(R):
+    """Convert rotation matrix to quaternion."""
+    trace = np.trace(R)
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    else:
+        if R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+            w = (R[2, 1] - R[1, 2]) / s
+            x = 0.25 * s
+            y = (R[0, 1] + R[1, 0]) / s
+            z = (R[0, 2] + R[2, 0]) / s
+        elif R[1, 1] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+            w = (R[0, 2] - R[2, 0]) / s
+            x = (R[0, 1] + R[1, 0]) / s
+            y = 0.25 * s
+            z = (R[1, 2] + R[2, 1]) / s
+        else:
+            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+            w = (R[1, 0] - R[0, 1]) / s
+            x = (R[0, 2] + R[2, 0]) / s
+            y = (R[1, 2] + R[2, 1]) / s
+            z = 0.25 * s
+    return [x, y, z, w]
+
+
+def quaternion_to_rotation_matrix(q):
+    """Convert quaternion [x, y, z, w] to 3x3 rotation matrix."""
+    x, y, z, w = q
+    R = np.array(
+        [
+            [1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x**2 + y**2)],
+        ]
+    )
+    return R
+
+
+def ht_to_posestamped(ht, frame_id="world"):
+    """Convert 4x4 HT matrix to PoseStamped."""
+    pose = PoseStamped()
+    pose.header.frame_id = frame_id
+
+    # Position
+    pose.pose.position.x = ht[0, 3]
+    pose.pose.position.y = ht[1, 3]
+    pose.pose.position.z = ht[2, 3]
+
+    # Orientation (rotation matrix to quaternion)
+    rot = R.from_matrix(ht[:3, :3])
+    q = rot.as_quat()  # [x, y, z, w]
+    pose.pose.orientation.x = q[0]
+    pose.pose.orientation.y = q[1]
+    pose.pose.orientation.z = q[2]
+    pose.pose.orientation.w = q[3]
+
+    return pose
+
+def point_to_posestamped(point, frame_id="world"):
+    """Convert array of x, y, z to PoseStamped."""
+    pose = PoseStamped()
+    pose.header.frame_id = frame_id
+
+    # Position
+    pose.pose.position.x = point[0]
+    pose.pose.position.y = point[1]
+    pose.pose.position.z = point[2]
+
+    return pose
+
+def posestamped_to_ht(pose_msg):
+    """Convert PoseStamped to 4x4 homogeneous transformation matrix."""
+    # Extract translation
+    tx = pose_msg.pose.position.x
+    ty = pose_msg.pose.position.y
+    tz = pose_msg.pose.position.z
+
+    # Extract rotation
+    qx = pose_msg.pose.orientation.x
+    qy = pose_msg.pose.orientation.y
+    qz = pose_msg.pose.orientation.z
+    qw = pose_msg.pose.orientation.w
+
+    # Quaternion to rotation matrix
+    rot = R.from_quat([qx, qy, qz, qw])
+    rot_matrix = rot.as_matrix()
+
+    # Construct HT
+    ht = np.eye(4)
+    ht[:3, :3] = rot_matrix
+    ht[:3, 3] = [tx, ty, tz]
+
+    return ht
+
+def pose_to_ht(pose_msg):
+    """Convert Pose to 4x4 homogeneous transformation matrix."""
+    # Extract translation
+    tx = pose_msg.position.x
+    ty = pose_msg.position.y
+    tz = pose_msg.position.z
+
+    # Extract rotation
+    qx = pose_msg.orientation.x
+    qy = pose_msg.orientation.y
+    qz = pose_msg.orientation.z
+    qw = pose_msg.orientation.w
+
+    # Quaternion to rotation matrix
+    rot = R.from_quat([qx, qy, qz, qw])
+    rot_matrix = rot.as_matrix()
+
+    # Construct HT
+    ht = np.eye(4)
+    ht[:3, :3] = rot_matrix
+    ht[:3, 3] = [tx, ty, tz]
+
+    return ht
+
+
+def inverse_ht(ht):
+    """Compute inverse of a 4x4 homogeneous transformation matrix."""
+    R = ht[:3, :3]
+    t = ht[:3, 3]
+
+    R_inv = R.T
+    t_inv = -R_inv @ t
+
+    ht_inv = np.eye(4)
+    ht_inv[:3, :3] = R_inv
+    ht_inv[:3, 3] = t_inv
+
+    return ht_inv
