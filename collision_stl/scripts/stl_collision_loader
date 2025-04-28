@@ -2,54 +2,51 @@
 
 import os
 import time
+
 import rclpy
 import trimesh
-
-from geometry_msgs.msg import Point, PoseStamped, Pose
-from moveit_msgs.msg import CollisionObject, PlanningScene, AttachedCollisionObject
+from geometry_msgs.msg import Point, Pose, PoseStamped
+from moveit_msgs.msg import AttachedCollisionObject, CollisionObject, PlanningScene
 from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
 from shape_msgs.msg import Mesh, MeshTriangle
 from std_msgs.msg import Header
 from std_srvs.srv import Trigger
 
+from custom_srv_pkg.srv import TargetObjectSend
+
 
 class STLCollisionPublisher(Node):
     def __init__(self):
-        super().__init__('stl_collision_publisher')
+        super().__init__("stl_collision_publisher")
 
-        self.collision_pub_ = self.create_publisher(CollisionObject, '/collision_object', 10)
-        self.attached_pub_ = self.create_publisher(AttachedCollisionObject, '/attached_collision_object', 10)
+        self.collision_pub_ = self.create_publisher(
+            CollisionObject, "/collision_object", 10
+        )
+        self.attached_pub_ = self.create_publisher(
+            AttachedCollisionObject, "/attached_collision_object", 10
+        )
 
-        self.pose_subscription = self.create_subscription(PoseStamped, '/main/object_pose', self.pose_callback, 10)
-        self.remove_service = self.create_service(Trigger, 'add_collision_object', self.add_collision_callback)
-        self.remove_service = self.create_service(Trigger, 'remove_collision_object', self.remove_collision_callback)
-        self.attach_service = self.create_service(Trigger, 'attach_collision_object', self.attach_collision_callback)
-        self.detach_service = self.create_service(Trigger, 'detach_collision_object', self.detach_collision_callback)
+        # self.pose_subscription = self.create_subscription(
+        #     PoseStamped, "/main/object_pose", self.pose_callback, 10
+        # )
+        self.make_stl_collision_server = self.create_service(TargetObjectSend, "make_stl_collision", self.make_stl_collision_callback)
+        self.remove_service = self.create_service(
+            Trigger, "add_collision_object", self.add_collision_callback
+        )
+        self.remove_service = self.create_service(
+            Trigger, "remove_collision_object", self.remove_collision_callback
+        )
+        self.attach_service = self.create_service(
+            Trigger, "attach_collision_object", self.attach_collision_callback
+        )
+        self.detach_service = self.create_service(
+            Trigger, "detach_collision_object", self.detach_collision_callback
+        )
 
         self.last_pose = None
-        self.target_obj = self.get_param_from_main_node('target_obj')
-        self.dataset_path_prefix = self.get_param_from_main_node('dataset_path_prefix')
-        self.get_logger().info(f"Using object: {self.target_obj}")
+        self.ros_mesh = None
 
-        self.mesh_path = os.path.join(self.dataset_path_prefix, self.target_obj, f"{self.target_obj}_centered.stl") 
-        self.ros_mesh = self.load_and_convert_mesh(self.mesh_path)
-
-    def get_param_from_main_node(self, param_name):
-        client = self.create_client(GetParameters, '/main_node/get_parameters')
-        while not client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().info("Waiting for /main_node/get_parameters service...")
-
-        request = GetParameters.Request()
-        request.names = [param_name]
-        future = client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-
-        if future.result() is not None:
-            return future.result().values[0].string_value
-        else:
-            self.get_logger().error(f"Failed to retrieve parameter '{param_name}' from /main_node.")
-            return "default_object"
 
     def load_and_convert_mesh(self, path):
         self.get_logger().info(f"Loading mesh from: {path}")
@@ -61,7 +58,9 @@ class STLCollisionPublisher(Node):
             mesh = mesh.dump().sum()
 
         mesh.apply_scale(0.001)
-        self.get_logger().info(f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces")
+        self.get_logger().info(
+            f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces"
+        )
 
         ros_mesh = Mesh()
         for face in mesh.faces:
@@ -70,11 +69,20 @@ class STLCollisionPublisher(Node):
             ros_mesh.vertices.append(Point(x=vertex[0], y=vertex[1], z=vertex[2]))
         return ros_mesh
 
-    def pose_callback(self, msg: PoseStamped):
-        self.last_pose = msg.pose
+    def make_stl_collision_callback(self, request:TargetObjectSend.Request, response:TargetObjectSend.Response):
+        target_obj = request.target_obj
+        dataset_path_prefix = request.dataset_path_prefix
+        self.get_logger().info(f"Using object: {target_obj}")
+
+        mesh_path = os.path.join(
+            dataset_path_prefix, target_obj, f"{target_obj}_centered.stl"
+        )
+        self.ros_mesh = self.load_and_convert_mesh(mesh_path)
+
+        self.last_pose = request.object_pose.pose
         self.get_logger().info(
             f"Pose stored from /main/object_pose: "
-            f"({msg.pose.position.x}, {msg.pose.position.y}, {msg.pose.position.z})"
+            f"({request.object_pose.pose.position.x}, {request.object_pose.pose.position.y}, {request.object_pose.pose.position.z})"
         )
 
         # Step 1: Remove existing object
@@ -90,11 +98,14 @@ class STLCollisionPublisher(Node):
         obj.id = "object"
         obj.header.frame_id = "world"
         obj.meshes = [self.ros_mesh]
-        obj.mesh_poses = [msg.pose]
+        obj.mesh_poses = [request.object_pose.pose]
         obj.operation = CollisionObject.ADD
         self.collision_pub_.publish(obj)
 
         self.get_logger().info("Collision object updated in planning scene.")
+
+        response.acknowledgement = True
+        return response
 
     def add_collision_callback(self, request, response):
         # Step 1: Remove existing object
@@ -150,14 +161,17 @@ class STLCollisionPublisher(Node):
         attached.object.meshes = [self.ros_mesh]
         attached.object.mesh_poses = [self.last_pose]
         attached.object.operation = CollisionObject.ADD
-        attached.touch_links = ["robotiq_hande_left_finger_link", "robotiq_hande_right_finger_link"]
+        attached.touch_links = [
+            "robotiq_hande_left_finger_link",
+            "robotiq_hande_right_finger_link",
+        ]
 
         self.attached_pub_.publish(attached)
 
         response.success = True
         response.message = "Object attached to gripper"
         return response
-    
+
     def detach_collision_callback(self, request, response):
         self.get_logger().info("Detaching and removing object from gripper and world")
 
@@ -178,7 +192,8 @@ class STLCollisionPublisher(Node):
         response.success = True
         response.message = "Object detached and removed"
         return response
-            
+
+
 def main():
     rclpy.init()
     node = STLCollisionPublisher()
@@ -191,6 +206,5 @@ def main():
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

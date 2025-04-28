@@ -9,7 +9,8 @@ import rclpy
 import rclpy.client
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
-from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
+from moveit_msgs.srv import GetPlanningScene
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
@@ -26,10 +27,12 @@ from custom_srv_pkg.srv import (
     Gripper,
     IKJointState,
     IMGSend,
+    JointStateCollision,
     PCLFuse,
     PCLMani,
     PointCloudSend,
     PointCloudSendWithMask,
+    TargetObjectSend,
 )
 
 from .utils import fake_utils, image_utils, utils
@@ -117,6 +120,9 @@ class MainNode(Node):
         self.data_sorted_grasp_gripper_distance = []
 
         self.passed_index = None
+
+        # Planning Scene
+        self.data_planning_scene = PlanningScene()
 
         """
         ################### PARAM ###########################
@@ -244,11 +250,21 @@ class MainNode(Node):
 
         self.client_best_grasp = self.create_client(BestGraspPose, "BestGraspPose")
 
+        self.client_stl_collision = self.create_client(
+            TargetObjectSend, "make_stl_collision"
+        )
+
         self.client_make_collision = self.create_client(
             PointCloudSend, "CollisionMaker"
         )
 
         self.client_ik_grasp = self.create_client(IKJointState, "joint_state_from_ik")
+        self.client_joint_state_collision = self.create_client(
+            JointStateCollision, "joint_state_collision_check"
+        )
+        self.client_get_planning_scene = self.create_client(
+            GetPlanningScene, "/get_planning_scene"
+        )
 
         self.client_make_collision_with_mask = self.create_client(PCLMani, "pcl_mani")
 
@@ -335,6 +351,17 @@ class MainNode(Node):
         future = client.call_async(Trigger.Request())
         future.add_done_callback(lambda res: self.log(res.result()))
 
+    def call_make_stl_collision(self, object_pose=None):
+        req = TargetObjectSend.Request()
+        if object_pose is None:
+            req.object_pose = self.data_object_pose
+        else:
+            req.object_pose = object_pose
+        req.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
+        req.target_obj = self.get_str_param("target_obj")
+
+        future = self.client_stl_collision.call_async(req)
+
     def command_callback(self, msg: String):
         """
         RViz command callback
@@ -390,10 +417,11 @@ class MainNode(Node):
                     )
 
                 self.pub_fused_pointcloud.publish(self.data_pointcloud_fused)
-                self.log(f"Fuse PointCloud, current width {self.data_pointcloud_fused.width}")
+                self.log(
+                    f"Fuse PointCloud, current width {self.data_pointcloud_fused.width}"
+                )
 
                 self.capture_to_fuse = False
-
 
     def zed_rgb_callback(self, msg: Image):
         """
@@ -656,6 +684,8 @@ class MainNode(Node):
             self.pub_object_pose.publish(self.data_object_pose)
             self.pub_pem_result.publish(self.data_msg_pem_result)
 
+            self.call_make_stl_collision()
+
             self.log(f"Response Received from PEM")
 
             # self.log(f"Response Received from ISM with best score: {best_score}")
@@ -827,33 +857,102 @@ class MainNode(Node):
         except Exception as e:
             self.elog(f"Failed to make collision with mask: -> {e}")
 
-
     ## CLIENT: IK GRASP #################################################
+    #  1. Get Planning Scene
+    #  2. Get all joint state by IK
+    #  3. Filter joint state by planning scene
+
     def command_ik_grasp(self):
-        if not self.client_ik_grasp.wait_for_service(timeout_sec=3.0):
-            self.elog("Service IK Grasp not available!")
+        # Get Planning Scene
+        if not self.client_get_planning_scene.wait_for_service(timeout_sec=3.0):
+            self.elog("Service /get_planning_scene not available!")
             return
-        if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
-            self.data_sorted_grasp_grip_pose
-        ):
-            self.log("No Best Grasp Data")
-            return
-        request = IKJointState.Request()
-        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
-        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
-        request.gripper_distance = self.data_sorted_grasp_gripper_distance
+        request_get_planning_scene = GetPlanningScene.Request()
+        request_get_planning_scene.components.components = (
+            PlanningSceneComponents.SCENE_SETTINGS
+            | PlanningSceneComponents.ROBOT_STATE
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+            | PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        )
+        future_get_planning_scene = self.client_get_planning_scene.call_async(
+            request_get_planning_scene
+        )
+        future_get_planning_scene.add_done_callback(
+            self.get_planning_scene_response_callback
+        )
 
-        future = self.client_ik_grasp.call_async(request)
-        future.add_done_callback(self.command_ik_grasp_response_callback)
-
-    def command_ik_grasp_response_callback(self, fut):
+    def get_planning_scene_response_callback(self, future_get_planning_scene):
         try:
-            result = fut.result()
-            self.log(f"Num Possible Joint state: {len(result.possible_aim_joint_state)}")
-            self.log(f"Possible Joint state: {result.possible_aim_joint_state}")
+            result_get_planning_scene = future_get_planning_scene.result()
+            self.data_planning_scene = result_get_planning_scene.scene
+            self.log(
+                f"Received Planning Scene of type: {type(self.data_planning_scene)}."
+            )
+
+            # IK Grasp
+            if not self.client_ik_grasp.wait_for_service(timeout_sec=3.0):
+                self.elog("Service IK Grasp not available!")
+                return
+            if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
+                self.data_sorted_grasp_grip_pose
+            ):
+                self.log("No Best Grasp Data")
+                return
+            request_ik_grasp = IKJointState.Request()
+            request_ik_grasp.sorted_aim_poses = self.data_sorted_grasp_aim_pose
+            request_ik_grasp.sorted_grip_poses = self.data_sorted_grasp_grip_pose
+            request_ik_grasp.gripper_distance = self.data_sorted_grasp_gripper_distance
+
+            future_ik_grasp = self.client_ik_grasp.call_async(request_ik_grasp)
+            future_ik_grasp.add_done_callback(self.ik_grasp_response_callback)
+        except Exception as e:
+            self.elog(f"Failed to get planning scene: -> {e}")
+
+    def ik_grasp_response_callback(self, future_ik_grasp):
+        try:
+            result_ik_grasp = future_ik_grasp.result()
+            self.log(
+                f"Num Possible Joint state: {len(result_ik_grasp.possible_aim_joint_state)}"
+            )
+            self.log(
+                f"Possible Joint state: {result_ik_grasp.possible_aim_joint_state[0]}"
+            )
+
+            if not self.client_joint_state_collision.wait_for_service(timeout_sec=3.0):
+                self.elog("Service Joint State Collision Check not available!")
+                return
+
+            request_joint_state_collision = JointStateCollision.Request()
+            request_joint_state_collision.joint_state = (
+                result_ik_grasp.possible_aim_joint_state
+            )
+            request_joint_state_collision.gripper_distance = (
+                result_ik_grasp.gripper_distance
+            )
+            request_joint_state_collision.planning_scene = self.data_planning_scene
+
+            future_joint_state_collision = self.client_joint_state_collision.call_async(
+                request_joint_state_collision
+            )
+            future_joint_state_collision.add_done_callback(
+                self.joint_state_collision_response_callback
+            )
+
         except Exception as e:
             self.elog(f"Failed to get joint state from IK: -> {e}")
 
+    def joint_state_collision_response_callback(self, fut):
+        try:
+            result_joint_state_collision = fut.result()
+            self.log(
+                f"Num Possible Joint state No Collsion: {len(result_joint_state_collision.possible_joint_state)}"
+            )
+            self.log(
+                f"Possible Joint state No Collsion: {result_joint_state_collision.possible_joint_state[0]}"
+            )
+
+        except Exception as e:
+            self.elog(f"Failed to check Joint State from Collsion : -> {e}")
 
     ## CLIENT: PLAN AIM GRIP ############################################
     def command_plan_aim_grip(self):
@@ -956,6 +1055,7 @@ class MainNode(Node):
         self.data_object_pose = fake_utils.get_random_pose_stamped()
         self.data_object_pose.pose.position.z += 0.8
         self.pub_object_pose.publish(self.data_object_pose)
+        self.call_make_stl_collision()
 
     ## CLIENT: FUSE POINTCLOUD ########################################
     def command_fuse_pointcloud(self):
@@ -975,11 +1075,12 @@ class MainNode(Node):
             return
 
         transformed_pointcloud_fused, _ = utils.transform_pointcloud(
-            msg=self.data_pointcloud_fused, tf=tf, frame_id="zed_left_camera_optical_frame"
+            msg=self.data_pointcloud_fused,
+            tf=tf,
+            frame_id="zed_left_camera_optical_frame",
         )
 
         self.pub_pointcloud_raw.publish(transformed_pointcloud_fused)
-
 
         request = PCLFuse.Request()
         request.pointcloud = transformed_pointcloud_fused
@@ -1029,11 +1130,8 @@ class MainNode(Node):
             self.elog(f"Failed to send distance: -> {e}")
 
     ## CLEAR POINTCLOUD
-
     def command_clear_pointcloud(self):
         self.data_pointcloud_fused = PointCloud2()
-
-
 
 
 def main(args=None):

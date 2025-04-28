@@ -1,5 +1,6 @@
 sensor_msgs/JointState[] joint_state
 float32[] gripper_distance
+moveit_msgs/PlanningScene planning_scene
 ---
 sensor_msgs/JointState[] possible_joint_state
 float32[] gripper_distance

@@ -1,0 +1,5 @@
+string target_obj
+string dataset_path_prefix
+geometry_msgs/PoseStamped object_pose
+---
+bool acknowledgement

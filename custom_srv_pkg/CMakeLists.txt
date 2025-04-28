@@ -9,6 +9,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(moveit_msgs REQUIRED)
+
 find_package(rosidl_default_generators REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
@@ -32,9 +34,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/PCLFuse.srv"
   "srv/IKJointState.srv"
   "srv/JointStateCollision.srv"
+  "srv/TargetObjectSend.srv"
+
   DEPENDENCIES std_msgs
   DEPENDENCIES sensor_msgs
   DEPENDENCIES geometry_msgs 
+  DEPENDENCIES moveit_msgs 
 )
 
 if(BUILD_TESTING)

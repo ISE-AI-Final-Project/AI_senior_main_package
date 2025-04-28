@@ -132,5 +132,22 @@ ament_target_dependencies(robot_pose_collision_check
 install(TARGETS robot_pose_collision_check DESTINATION lib/${PROJECT_NAME})
 
 
+add_executable(joint_state_filter_server src/joint_state_filter_server.cpp)
+
+ament_target_dependencies(joint_state_filter_server
+  rclcpp
+  std_msgs
+  urdf
+  srdfdom
+  moveit_core
+  moveit_ros_planning
+  moveit_ros_planning_interface
+  moveit_msgs
+  custom_srv_pkg
+)
+install(TARGETS joint_state_filter_server DESTINATION lib/${PROJECT_NAME})
+
+
+
 
 ament_package()

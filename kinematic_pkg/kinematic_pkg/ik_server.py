@@ -74,8 +74,8 @@ class UR3eIKNode(Node):
     def dh_matrix_joint(self, joint=0, joint_angle=0):
         a, alpha, d, theta_offset = self.dh_params[joint]
         return self.dh_matrix(a, alpha, d, joint_angle + theta_offset)
-    
-    def ik(self, pose_wrt_base:PoseStamped, combination):
+
+    def ik(self, pose_wrt_base: PoseStamped, combination):
         try:
 
             # Note T_a_b = Frame a wrt to b, T_a = Frame a wrt 0
@@ -98,9 +98,7 @@ class UR3eIKNode(Node):
 
             cos0 = D3 / math.sqrt(x5**2 + y5**2)
             sin0 = math.sqrt(1 - cos0**2)
-            theta0 = math.atan2(y5, x5) - math.atan2(
-                combination[0] * sin0, cos0
-            )
+            theta0 = math.atan2(y5, x5) - math.atan2(combination[0] * sin0, cos0)
 
             # Step3: Find p4
             D4 = np.abs(self.dh_params[4][2])
@@ -122,9 +120,7 @@ class UR3eIKNode(Node):
                 np.cross(n_z4, n_p1_prime)
             )
 
-            theta4 = math.atan2(
-                np.dot(n_y4, (pe - p5)), np.dot(n_x4, (pe - p5))
-            )
+            theta4 = math.atan2(np.dot(n_y4, (pe - p5)), np.dot(n_x4, (pe - p5)))
 
             # Step5: Find theta2
             A1 = np.abs(self.dh_params[1][0])
@@ -134,11 +130,11 @@ class UR3eIKNode(Node):
             p1 = np.array([0, 0, D0])
             p1_prime = p1 + D3 * n_p1_prime
 
-            print("p4: ", p4)
+            # print("p4: ", p4)
 
-            cos2_180 = (
-                A1**2 + A2**2 - np.linalg.norm(p1_prime - p4) ** 2
-            ) / (2 * A1 * A2)
+            cos2_180 = (A1**2 + A2**2 - np.linalg.norm(p1_prime - p4) ** 2) / (
+                2 * A1 * A2
+            )
             sin2_180 = combination[2] * math.sqrt(1 - cos2_180**2)
 
             theta2 = np.pi - math.atan2(sin2_180, cos2_180)
@@ -201,25 +197,29 @@ class UR3eIKNode(Node):
             theta5 = np.arctan2(np.dot(ny_ik, nx_e), np.dot(nx_ik, nx_e))
 
             return [
-                        theta0 + np.pi / 2,
-                        theta1 + np.pi,
-                        theta2,
-                        theta3,
-                        theta4,
-                        theta5,
-                        0.0,
-                        0.0,
-                    ]
-        
+                theta0 + np.pi / 2,
+                theta1 + np.pi,
+                theta2,
+                theta3,
+                theta4,
+                theta5,
+                0.0,
+                0.0,
+            ]
+
         except Exception as e:
-            print(f"Combination: {combination} Fail due to {e}")
+            # print(f"Combination: {combination} Fail due to {e}")
             return None
 
     def ik_joint_state_callback(
         self, request: IKJointState.Request, response: IKJointState.Response
     ):
 
-        for aim_pose_world, grip_pose_world in zip(request.sorted_aim_poses.poses, request.sorted_grip_poses.poses):
+        for aim_pose_world, grip_pose_world, gripper_distance in zip(
+            request.sorted_aim_poses.poses,
+            request.sorted_grip_poses.poses,
+            request.gripper_distance,
+        ):
 
             aim_pose = utils.transform_pose(
                 self.tf_buffer, aim_pose_world, current_frame="world", new_frame="base"
@@ -230,11 +230,15 @@ class UR3eIKNode(Node):
 
             combinations = list(itertools.product([1, -1], repeat=3))
             for combination in combinations:
-                print(f"Combination: {combination}")
-                aim_joint_state_by_ik = self.ik(pose_wrt_base=aim_pose, combination=combination)
+                # print(f"Combination: {combination}")
+                aim_joint_state_by_ik = self.ik(
+                    pose_wrt_base=aim_pose, combination=combination
+                )
 
                 if aim_joint_state_by_ik:
-                    grip_joint_state_by_ik = self.ik(pose_wrt_base=grip_pose, combination=combination)
+                    grip_joint_state_by_ik = self.ik(
+                        pose_wrt_base=grip_pose, combination=combination
+                    )
 
                     if grip_joint_state_by_ik:
                         # Output Joint with offset
@@ -242,8 +246,13 @@ class UR3eIKNode(Node):
                         msg.name = self.joint_names
                         msg.position = aim_joint_state_by_ik
                         response.possible_aim_joint_state.append(msg)
+                        response.gripper_distance.append(gripper_distance)
 
-            print("==============")
+            # print("==============")
+
+        self.get_logger().info(
+            f"IK Results: {len(request.sorted_aim_poses.poses)} Grasp Poses Received. {len(response.possible_aim_joint_state)} Joint States usable."
+        )
 
         return response
 
