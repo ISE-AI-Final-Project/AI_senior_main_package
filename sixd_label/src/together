@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+
+import os
+import rclpy
+import time
+import trimesh
+import numpy as np
+from std_srvs.srv import Trigger
+import tf2_ros
+import tf2_geometry_msgs
+import cv2
+from scipy.spatial.transform import Rotation as R
+import json
+from std_msgs.msg import String
+from rclpy.node import Node
+
+from geometry_msgs.msg import Point, Pose
+from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import PlanningScene
+from shape_msgs.msg import Mesh, MeshTriangle
+from std_msgs.msg import Header
+
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+
+class ScenePublisher(Node):
+    def __init__(self):
+        super().__init__('scene_publisher')
+
+        self.object_name = ['cereal', 'acnewash', 'contactcleaning', 'jbl_2', 'lactose', 'orange', 'purple', 'sunscreen']
+        # self.object_name = ['purple']
+        self.mesh_paths = []
+        for name in self.object_name:
+            self.mesh_paths.append('/home/bham/Downloads/ply/'+ name +'/'+ name +'_centered.stl')
+        self.meshes = []
+        self.collision_objects = {}
+
+        rgb_path = '/home/bham/Desktop/test_scene/rgb.png'
+        depth_path = '/home/bham/Desktop/test_scene/depth.png'
+        camera_intrinsic_path = '/home/bham/Desktop/SAM-6D/SAM-6D/zed.json'
+
+        self.rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
+        self.depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+
+        if self.rgb is None or self.depth is None:
+            raise RuntimeError("Failed to load RGB or Depth images.")
+
+        with open(camera_intrinsic_path, 'r') as f:
+            intrinsics_data = json.load(f)
+
+        self.K = np.array(intrinsics_data['cam_K']).reshape(3, 3)
+        self.fx = self.K[0, 0]
+        self.fy = self.K[1, 1]
+        self.cx = self.K[0, 2]
+        self.cy = self.K[1, 2]
+
+        self.create_subscription(PlanningScene, '/planning_scene', self.planning_scene_callback, 10)
+
+        self.collision_pub = self.create_publisher(CollisionObject, '/collision_object', 10)
+        self.pcl_pub = self.create_publisher(PointCloud2, '/rgbd_pointcloud', 10)
+
+        self.save_service = self.create_service(Trigger, '/save_objects', self.save_objects_callback)
+
+        self.load_meshes()
+        self.publish_scene_once()
+
+        print('Known objects : ')
+        for col_obj in self.collision_objects.values():
+            print(col_obj.id, col_obj.mesh_poses)
+            
+
+    def planning_scene_callback(self, msg):
+        self.collision_objects.clear()
+
+        for co in msg.world.collision_objects:
+            name = co.id
+            self.collision_objects[name] = co  # Save the full CollisionObject
+
+        self.get_logger().info("Received PlanningScene update.")
+        self.get_logger().info("Current Known Objects:")
+
+        for obj_name, obj_msg in self.collision_objects.items():
+            if not obj_msg.pose:
+                continue  # Important! poses, not mesh_poses
+
+            pose = obj_msg.pose
+
+            self.get_logger().info(
+                f" - {obj_name}: "
+                f"frame_id='{obj_msg.header.frame_id}', "
+                f"position=({pose.position.x:.3f}, {pose.position.y:.3f}, {pose.position.z:.3f}), "
+                f"orientation=({pose.orientation.x:.3f}, {pose.orientation.y:.3f}, {pose.orientation.z:.3f}, {pose.orientation.w:.3f})"
+            )
+
+    def load_meshes(self):
+        for path in self.mesh_paths:
+            mesh = trimesh.load_mesh(path)
+
+            if isinstance(mesh, trimesh.Scene):
+                mesh = trimesh.util.concatenate(mesh.dump())
+            elif not isinstance(mesh, trimesh.Trimesh):
+                mesh = mesh.dump().sum()
+
+            mesh.apply_scale(0.01)
+
+            ros_mesh = Mesh()
+            for face in mesh.faces:
+                ros_mesh.triangles.append(MeshTriangle(vertex_indices=face))
+            for vertex in mesh.vertices:
+                ros_mesh.vertices.append(Point(x=vertex[0], y=vertex[1], z=vertex[2]))
+
+            self.meshes.append(ros_mesh)
+
+    def publish_scene_once(self):
+        for idx, ros_mesh in enumerate(self.meshes):
+            obj = CollisionObject()
+            now = self.get_clock().now().to_msg()
+
+            obj.header = Header()
+            obj.header.stamp = now
+            obj.header.frame_id = '/world'
+            time.sleep(0.2)
+
+            name = self.object_name[idx]
+            obj.id = name
+            obj.meshes.append(ros_mesh)
+            time.sleep(0.2)
+
+            pose = Pose()
+            pose.position.x = 0.0
+            pose.position.y = 0.0
+            pose.position.z = 0.0
+            pose.orientation.w = 1.0
+
+            obj.mesh_poses.append(pose)
+            obj.operation = CollisionObject.ADD
+            time.sleep(0.2)
+
+            self.collision_pub.publish(obj)
+            time.sleep(0.1)
+            self.collision_objects[name] = obj
+            self.get_logger().info(f"Published and stored CollisionObject: {name}")
+            time.sleep(1)
+
+        points = []
+        h, w = self.depth.shape
+        for v in range(h):
+            for u in range(w):
+                z = self.depth[v, u] / 1000.0
+                if z == 0:
+                    continue
+                x = (u - self.cx) * z / self.fx
+                y = (v - self.cy) * z / self.fy
+                x *= 10
+                y *= 10
+                z *= 10
+                b, g, r = self.rgb[v, u]
+                rgb = (int(r) << 16) | (int(g) << 8) | int(b)
+                points.append([x, y, z, rgb])
+
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+        ]
+
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = '/world'
+
+        pcl_msg = point_cloud2.create_cloud(header, fields, points)
+        self.pcl_pub.publish(pcl_msg)
+        self.get_logger().info(f"Published point cloud with {len(points)} points.")
+
+        self.get_logger().info("All objects and point cloud published once.")
+
+    def save_objects_callback(self, request, response):
+        self.get_logger().info("Saving all objects...")
+        save_data = {"pose": {}}
+        for obj_name, obj_msg in self.collision_objects.items():
+            if not hasattr(obj_msg, 'pose'):
+                continue
+
+            pose = obj_msg.pose
+            qx = pose.orientation.x
+            qy = pose.orientation.y
+            qz = pose.orientation.z
+            qw = pose.orientation.w
+
+            r = R.from_quat([qx, qy, qz, qw])
+            rotation_matrix = r.as_matrix().tolist()
+
+            translation = [
+                pose.position.x/10,
+                pose.position.y/10,
+                pose.position.z/10
+            ]
+
+            save_data["pose"][obj_name] = {
+                "quaternion": {
+                    "x": pose.position.x/10,
+                    "y": pose.position.y/10,
+                    "z": pose.position.z/10,
+                    "qx": qx,
+                    "qy": qy,
+                    "qz": qz,
+                    "qw": qw
+                },
+                "rotation": rotation_matrix,
+                "translation": translation
+            }
+
+        output_path = '/home/bham/Desktop/res.json'
+        with open(output_path, 'w') as f:
+            import json
+            json.dump(save_data, f, indent=4)
+
+        self.get_logger().info(f"Saved all objects to {output_path}")
+
+        response.success = True
+        response.message = "Saved all objects successfully."
+        return response
+
+def main():
+    rclpy.init()
+    node = ScenePublisher()
+    rclpy.spin(node)
+
+if __name__ == '__main__':
+    main()

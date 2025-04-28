@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+
+import os
+import rclpy
+import trimesh
+
+from rclpy.node import Node
+from geometry_msgs.msg import Point, Pose
+from moveit_msgs.msg import CollisionObject, PlanningScene
+from shape_msgs.msg import Mesh, MeshTriangle
+from std_msgs.msg import Header
+from tf2_ros import StaticTransformBroadcaster
+from geometry_msgs.msg import TransformStamped
+
+class MultiMeshPublisher(Node):
+    def __init__(self, mesh_paths):
+        super().__init__('multi_mesh_publisher')
+
+        self.mesh_paths = mesh_paths
+        self.meshes = []
+
+        self.collision_pub = self.create_publisher(PlanningScene, '/planning_scene', 10)
+        self.static_broadcaster = StaticTransformBroadcaster(self)
+        self.publish_static_transform()
+        self.load_meshes()
+        self.timer = self.create_timer(2.0, self.publish_collision_objects)
+
+    def publish_static_transform(self):
+        static_tf = TransformStamped()
+        static_tf.header.stamp = self.get_clock().now().to_msg()
+        static_tf.header.frame_id = 'world'
+        static_tf.child_frame_id = 'camera_frame'
+        static_tf.transform.translation.x = 0.0
+        static_tf.transform.translation.y = 0.0
+        static_tf.transform.translation.z = 0.0
+        static_tf.transform.rotation.x = 0.0
+        static_tf.transform.rotation.y = 0.0
+        static_tf.transform.rotation.z = 0.0
+        static_tf.transform.rotation.w = 1.0
+
+        self.static_broadcaster.sendTransform(static_tf)
+        self.get_logger().info("Published static transform from 'world' to 'camera_frame'.")
+
+    def load_meshes(self):
+        for path in self.mesh_paths:
+            self.get_logger().info(f"Loading mesh: {path}")
+            mesh = trimesh.load_mesh(path)
+
+            if isinstance(mesh, trimesh.Scene):
+                mesh = trimesh.util.concatenate(mesh.dump())
+            elif not isinstance(mesh, trimesh.Trimesh):
+                mesh = mesh.dump().sum()
+
+            mesh.apply_scale(0.001)
+
+            ros_mesh = Mesh()
+            for face in mesh.faces:
+                ros_mesh.triangles.append(MeshTriangle(vertex_indices=face))
+            for vertex in mesh.vertices:
+                ros_mesh.vertices.append(Point(x=vertex[0], y=vertex[1], z=vertex[2]))
+            
+            self.meshes.append(ros_mesh)
+
+    def publish_collision_objects(self):
+        planning_scene = PlanningScene()
+        planning_scene.is_diff = True
+
+        for idx, ros_mesh in enumerate(self.meshes):
+            obj = CollisionObject()
+            obj.id = f"object_{idx}"
+            obj.header.frame_id = 'camera_frame'
+            obj.meshes.append(ros_mesh)
+
+            pose = Pose()
+            pose.position.x = 0.0
+            pose.position.y = 0.0
+            pose.position.z = 2.0
+            pose.orientation.w = 1.0
+            obj.mesh_poses.append(pose)
+
+            obj.operation = CollisionObject.ADD
+            planning_scene.world.collision_objects.append(obj)
+
+        self.collision_pub.publish(planning_scene)
+        self.get_logger().info(f"Published {len(self.meshes)} collision objects to planning scene.")
+        self.get_logger().info("All collision objects published. Shutting down.")
+        rclpy.shutdown()
+
+def main():
+    rclpy.init()
+
+    # Replace with your list of STL paths
+    mesh_paths = [
+        '/home/bham/Downloads/ply/cereal/cereal_centered.stl',
+        '/home/bham/Downloads/ply/acnewash/acnewash_centered.stl',
+    ]
+
+    node = MultiMeshPublisher(mesh_paths)
+    rclpy.spin(node)
+
+if __name__ == '__main__':
+    main()

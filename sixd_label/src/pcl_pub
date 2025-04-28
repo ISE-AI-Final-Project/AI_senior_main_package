@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+
+import numpy as np
+import cv2
+import json
+
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
+
+class PCLPublisher(Node):
+    def __init__(self):
+        super().__init__('pcl_pub')
+
+        # Set file paths
+        rgb_path = '/home/bham/Desktop/test_scene/rgb.png'
+        depth_path = '/home/bham/Desktop/test_scene/depth.png'
+        camera_intrinsic_path = '/home/bham/Desktop/SAM-6D/SAM-6D/zed.json'
+
+        # Load RGB and Depth
+        rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
+        depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+
+        if rgb is None or depth is None:
+            raise RuntimeError("Failed to load RGB or Depth image.")
+
+        self.rgb = rgb
+        self.depth = depth
+
+        # Load camera intrinsics
+        with open(camera_intrinsic_path, 'r') as f:
+            intrinsics_data = json.load(f)
+
+        self.K = np.array(intrinsics_data['cam_K']).reshape(3, 3)
+        self.fx = self.K[0, 0]
+        self.fy = self.K[1, 1]
+        self.cx = self.K[0, 2]
+        self.cy = self.K[1, 2]
+
+        self.pub = self.create_publisher(PointCloud2, '/rgbd_pointcloud', 10)
+
+        # Timer to publish periodically
+        self.timer = self.create_timer(0.5, self.timer_callback)
+
+    def timer_callback(self):
+        points = []
+        h, w = self.depth.shape
+
+        for v in range(h):
+            for u in range(w):
+                z = self.depth[v, u] / 1000.0  # if depth in mm, convert to meters
+                if z == 0:
+                    continue
+                x = (u - self.cx) * z / self.fx
+                y = (v - self.cy) * z / self.fy
+
+                b, g, r = self.rgb[v, u]
+                rgb = (int(r) << 16) | (int(g) << 8) | int(b)
+
+                points.append([x, y, z, rgb])
+
+        # Create PointCloud2
+        fields = [
+                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+                PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+            ]
+
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = 'camera_frame'  # Match the frame published earlier
+
+        pcl_msg = point_cloud2.create_cloud(header, fields, points)
+        self.pub.publish(pcl_msg)
+        self.get_logger().info(f"Published point cloud with {len(points)} points.")
+        self.get_logger().info("All collision objects published. Shutting down.")
+        rclpy.shutdown()
+
+def main():
+    rclpy.init()
+    node = PCLPublisher()
+    rclpy.spin(node)
+
+
+if __name__ == '__main__':
+    main()
