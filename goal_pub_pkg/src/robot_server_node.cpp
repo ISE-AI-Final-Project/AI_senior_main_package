@@ -7,9 +7,11 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include "custom_srv_pkg/srv/aim_grip_plan.hpp"
+#include "custom_srv_pkg/srv/joint_pose.hpp"
 
 using Trigger = std_srvs::srv::Trigger;
 using AimGripPlan = custom_srv_pkg::srv::AimGripPlan;
+using JointPose = custom_srv_pkg::srv::JointPose;
 
 static const std::string PLANNING_GROUP = "ur_arm";
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("robot_server");
@@ -259,6 +261,46 @@ void handle_home_trigger_request(
     home_plan = false;
 }
 
+void handle_joint_pose_request(
+    const std::shared_ptr<custom_srv_pkg::srv::JointPose::Request> request,
+    std::shared_ptr<custom_srv_pkg::srv::JointPose::Response> response)
+{
+    const auto &js = request->joint_state;
+
+    if (js.name.size() != js.position.size())
+    {
+        RCLCPP_ERROR(LOGGER, "JointState name and position sizes do not match.");
+        response->success = false;
+        return;
+    }
+
+    std::map<std::string, double> joint_goal;
+    for (size_t i = 0; i < js.name.size(); ++i)
+    {
+        joint_goal[js.name[i]] = js.position[i];
+    }
+
+    move_group->setJointValueTarget(joint_goal);
+
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if (move_group->plan(plan) != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(LOGGER, "Failed to plan to joint goal.");
+        response->success = false;
+        return;
+    }
+
+    if (move_group->execute(plan) != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+        RCLCPP_ERROR(LOGGER, "Failed to execute joint goal.");
+        response->success = false;
+        return;
+    }
+
+    RCLCPP_INFO(LOGGER, "Successfully executed joint goal.");
+    response->success = true;
+}
+
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
@@ -287,6 +329,9 @@ int main(int argc, char **argv)
 
     auto aim_grip_plan_service = node->create_service<AimGripPlan>(
         "AimGripPlan", handle_aim_grip_request);
+
+    auto move_joint_pose_service = node->create_service<JointPose>(
+        "move_joint_pose", handle_joint_pose_request);
 
     auto aim_trigger_service = node->create_service<Trigger>(
         "aim_trigger_service", handle_aim_trigger_request);
