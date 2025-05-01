@@ -59,24 +59,6 @@ class MainNode(Node):
         self.command_map = {
             "capture": self.command_capture,
             "capture_to_fuse": self.command_capture_to_fuse,
-            "req_ism": self.command_srv_req_ism,
-            "req_pem": self.command_srv_req_pem,
-            "generate_all_grasp": self.command_srv_all_grasp,
-            "generate_best_grasp": self.command_srv_best_grasp,
-            "make_collision": self.command_srv_make_collision,
-            "make_collision_with_mask": self.command_srv_make_collision_with_mask,
-            "ik_grasp": self.command_ik_grasp,
-            "plan_aim_grip": self.command_plan_aim_grip,
-            "trigger_aim": self.command_trigger_aim,
-            "trigger_grip": self.command_trigger_grip,
-            "plan_home": self.command_plan_home,
-            "trigger_home": self.command_trigger_home,
-            "attach_object": self.command_attach_object,
-            "detach_object": self.command_detach_object,
-            "gripper_open": self.command_gripper_open,
-            "gripper_close": self.command_gripper_close,
-            "fake_point_cloud": self.command_fake_point_cloud,
-            "fake_object_pose": self.command_fake_object_pose,
             "fuse_pointcloud": self.command_fuse_pointcloud,
             "clear_pointcloud": self.command_clear_pointcloud,
             "auto_fuse_pointcloud": self.command_auto_fuse_pointcloud,
@@ -483,7 +465,7 @@ class MainNode(Node):
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name="rgb",
+                file_name=(f"rgb_{self.capture_index}", "rgb")[self.capture_index is None],
             )
 
             self.log("Captured RGB.")
@@ -526,7 +508,7 @@ class MainNode(Node):
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name="depth",
+                file_name=(f"depth_{self.capture_index}", "depth")[self.capture_index is None],
             )
 
             self.log("Captured depth.")
@@ -559,479 +541,6 @@ class MainNode(Node):
     def command_capture_to_fuse(self, new_folder=False):
         self.capture_to_fuse = True
         self.command_capture(new_folder=new_folder)
-
-    ## CLIENT: ISM ########################################
-    def command_srv_req_ism(self):
-        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
-            self.elog("No RGB or Depth Data.")
-            return
-
-        client_connected = self.client_ism.connect()
-        if not client_connected:
-            self.elog(f"Server ISM not started")
-            return
-
-        try:
-            self.req_ism_time = self.get_current_time()
-            target_obj = self.get_str_param("target_obj")
-
-            # Service Request
-            best_mask, best_box, best_score, combined_result = (
-                self.client_ism.request_msg(
-                    msg_type_in=["numpyarray", "numpyarray", "string", "string"],
-                    msg_in=[
-                        self.data_array_rgb,
-                        self.data_array_depth,
-                        target_obj,
-                        self.get_str_param("dataset_path_prefix"),
-                    ],
-                )
-            )
-
-            # Save Best Mask
-            self.data_best_mask = best_mask
-            self.data_msg_best_mask = image_utils.mask_to_ros_image(self.data_best_mask)
-
-            # Save Image
-            image_utils.save_binary_mask(
-                mask=best_mask,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_best_mask_{target_obj}",
-            )
-            image_utils.save_rgb_image(
-                rgb_image=combined_result,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_ism_result_{target_obj}",
-            )
-
-            # Pub
-            self.pub_best_mask.publish(self.data_msg_best_mask)
-
-            self.log(f"Response Received from ISM with best score: {best_score}")
-        except Exception as e:
-            self.elog(f"Failed to send request: {e}")
-
-        self.client_ism.disconnect()
-        self.log(f"ISM Connection Closed.")
-
-    ## CLIENT: PEM ########################################
-    def command_srv_req_pem(self):
-        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
-            self.elog("No RGB or Depth Data. Capture First")
-            return
-
-        if self.is_empty(self.data_best_mask):
-            self.elog("No Best Mask. Req ISM First.")
-            return
-
-        client_connected = self.client_pem.connect()
-        if not client_connected:
-            self.elog(f"Server PEM not started")
-            return
-
-        try:
-            target_obj = self.get_str_param("target_obj")
-
-            # Service Request
-            result_rot, result_trans, result_image = self.client_pem.request_msg(
-                msg_type_in=[
-                    "numpyarray",
-                    "numpyarray",
-                    "numpyarray",
-                    "string",
-                    "string",
-                ],
-                msg_in=[
-                    self.data_best_mask,
-                    self.data_array_rgb,
-                    self.data_array_depth,
-                    target_obj,
-                    self.get_str_param("dataset_path_prefix"),
-                ],
-            )
-
-            self.data_pem_result = result_image
-            self.data_msg_pem_result = image_utils.rgb_to_ros_image(
-                self.data_pem_result
-            )
-
-            # Object PoseStamped WRT Zed
-            self.data_object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
-                rotation=result_rot,
-                translation=result_trans,
-                frame_id="zed_left_camera_optical_frame",
-            )
-
-            self.log(self.data_object_pose_wrt_cam)
-
-            # Transform to world
-            self.data_object_pose = utils.transform_pose_stamped(
-                self.tf_buffer,
-                self.data_object_pose_wrt_cam,
-                current_frame="zed_left_camera_optical_frame",
-                new_frame="world",
-            )
-
-            # Save Image
-            image_utils.save_rgb_image(
-                rgb_image=result_image,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_pem_result_{target_obj}",
-            )
-
-            # Pub
-            self.pub_object_pose.publish(self.data_object_pose)
-            self.pub_pem_result.publish(self.data_msg_pem_result)
-
-            self.call_make_stl_collision()
-
-            self.log(f"Response Received from PEM")
-
-            # self.log(f"Response Received from ISM with best score: {best_score}")
-        except Exception as e:
-            self.elog(f"Failed to send request: {e}")
-
-        self.client_pem.disconnect()
-        self.log(f"PEM Connection Closed.")
-
-    ## CLIENT: ALL_GRASP ########################################
-    async def command_srv_all_grasp(self):
-        if not self.client_all_grasp.wait_for_service(timeout_sec=3.0):
-            self.elog("Service All Grasp not available!")
-            return
-
-        request = GraspPoseSend.Request()
-        request.target_obj = self.get_str_param("target_obj")
-        request.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
-
-        # Call
-        all_grasp_response = await self.call_service(self.client_all_grasp, request)
-        if not all_grasp_response:
-            return
-
-        # Response
-        num_poses = len(all_grasp_response.grasp_poses.grasp_poses)
-        self.log(f"Received {num_poses} grasp pose(s).")
-        self.data_all_grasp_pose = all_grasp_response.grasp_poses
-
-    ## CLIENT: BEST_GRASP########################################
-    async def command_srv_best_grasp(self):
-        if not self.client_best_grasp.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Best Grasp not available!")
-            return
-
-        if self.is_empty(self.data_all_grasp_pose):
-            self.elog("NO all grasp data")
-            return
-
-        if self.is_empty(self.data_object_pose):
-            self.elog("NO Object Pose Data, Req PEM First")
-            return
-
-        request = BestGraspPose.Request()
-        request.all_grasp_poses = self.data_all_grasp_pose
-        request.object_pose = self.data_object_pose
-        self.log(f"Sending {len(request.all_grasp_poses.grasp_poses)} grasp poses.")
-
-        # Call
-        best_grasp_response = await self.call_service(self.client_best_grasp, request)
-        if not best_grasp_response:
-            return
-
-        # Response
-        self.data_sorted_grasp_aim_pose = best_grasp_response.sorted_aim_poses
-        self.data_sorted_grasp_grip_pose = best_grasp_response.sorted_grip_poses
-        self.data_sorted_grasp_gripper_distance = best_grasp_response.gripper_distance
-
-        num_passed_grasp = len(self.data_sorted_grasp_aim_pose.poses)
-
-        if num_passed_grasp == 0:
-            self.elog("No grasp passed criteria")
-            return
-
-        self.log(f"Received {num_passed_grasp} best aim pose.")
-
-        # for i, pose in enumerate(self.data_sorted_grasp_aim_pose.poses):
-        #     pos = pose.position
-        #     ori = pose.orientation
-        #     self.log(
-        #         f"[{i:02d}] Position: x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f} | "
-        #         f"Orientation: x={ori.x:.3f}, y={ori.y:.3f}, z={ori.z:.3f}, w={ori.w:.3f}"
-        #     )
-        self.pub_best_grasp_aim_poses.publish(self.data_sorted_grasp_aim_pose)
-        self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
-
-    ## CLIENT: MAKE COLLISION ########################################
-    async def command_srv_make_collision(self):
-        if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Make Collision not available!")
-            return
-
-        if self.is_empty(self.data_pointcloud):
-            self.elog("Cannot make Collision. Capture pointcloud first.")
-            return
-
-        request = PointCloudSend.Request()
-        request.pointcloud = self.data_pointcloud  # Correct field assignment
-
-        # Call
-        make_collision_response = await self.call_service(
-            self.client_make_collision, request
-        )
-        if not make_collision_response:
-            return
-
-        # Response
-        self.log(f"Make Collision Success")
-
-    ## CLIENT: MAKE COLLISION WITH MASK #####################################
-    async def command_srv_make_collision_with_mask(self):
-        if not self.client_make_collision_with_mask.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Make Collision With Mask not available!")
-            return
-
-        if self.is_empty(self.data_pointcloud):
-            self.elog("Cannot make Collision. Capture pointcloud first.")
-            return
-
-        if self.is_empty(self.data_msg_best_mask):
-            self.elog("No Best Mask. Req ISM first.")
-            return
-
-        req = PCLMani.Request()
-        req.rgb_image = self.data_msg_rgb
-        req.depth_image = self.data_msg_depth
-        req.mask_image = self.data_msg_best_mask
-        req.sixd_pose = self.data_object_pose_wrt_cam
-        req.target_object = self.get_str_param("target_obj")
-        req.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
-        req.camera_info = self.camera_info
-
-        # Call
-        make_collision_with_mask_response = await self.call_service(
-            self.client_make_collision, req
-        )
-        if not make_collision_with_mask_response:
-            return
-
-        # Response
-        self.log(f"Remove Target Object from Pointcloud success. Making Collision")
-        try:
-            # Transform to world
-            tf = self.tf_buffer.lookup_transform(
-                "world",
-                make_collision_with_mask_response.pointcloud.header.frame_id,
-                rclpy.time.Time(),
-                rclpy.duration.Duration(seconds=0.5),
-            )
-
-            transformed_pointcloud_no_object, transformed_xyz_no_object = (
-                utils.transform_pointcloud(
-                    msg=make_collision_with_mask_response.pointcloud,
-                    tf=tf,
-                    frame_id="world",
-                )
-            )
-
-            self.data_pointcloud_no_object = transformed_pointcloud_no_object
-
-            self.pub_pointcloud_no_object.publish(self.data_pointcloud_no_object)
-
-            request_make_collision = PointCloudSend.Request()
-            request_make_collision.pointcloud = transformed_pointcloud_no_object
-
-            # Call
-            make_collision_response = await self.call_service(
-                self.client_make_collision, request_make_collision
-            )
-            if not make_collision_response:
-                return
-
-            # Response
-            self.log(f"Make Collision Success")
-
-        except Exception as e:
-            self.elog(f"Failed to make collision with mask: -> {e}")
-
-    ## CLIENT: IK GRASP #################################################
-    #  1. Get Planning Scene
-    #  2. Get all joint state by IK
-    #  3. Filter joint state by planning scene
-
-    async def command_ik_grasp(self):
-        # Wait for services to be available
-        if not self.client_get_planning_scene.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /get_planning_scene not available!")
-            return
-        if not self.client_ik_grasp.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /ik_grasp not available!")
-            return
-        if not self.client_joint_state_collision.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /joint_state_collision not available!")
-            return
-
-        # Step 1: Get Planning Scene
-        planning_scene_request = GetPlanningScene.Request()
-        planning_scene_request.components.components = (
-            PlanningSceneComponents.SCENE_SETTINGS
-            | PlanningSceneComponents.ROBOT_STATE
-            | PlanningSceneComponents.WORLD_OBJECT_NAMES
-            | PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
-        )
-        planning_scene_response = await self.call_service(
-            self.client_get_planning_scene, planning_scene_request
-        )
-        if not planning_scene_response:
-            return
-        self.data_planning_scene = planning_scene_response.scene
-        self.get_logger().info("Planning scene retrieved successfully.")
-
-        # Step 2: IK Grasp
-        if not self.data_sorted_grasp_aim_pose or not self.data_sorted_grasp_grip_pose:
-            self.get_logger().warn("No grasp data available.")
-            return
-
-        ik_request = IKJointState.Request()
-        ik_request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
-        ik_request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
-        ik_request.gripper_distance = self.data_sorted_grasp_gripper_distance
-        ik_request.current_joint_state = (
-            self.data_planning_scene.robot_state.joint_state
-        )
-
-        ik_response = await self.call_service(self.client_ik_grasp, ik_request)
-        if not ik_response or not ik_response.possible_aim_joint_state:
-            self.get_logger().warn("No valid IK solutions found.")
-            return
-        self.get_logger().info(
-            f"IK solution found: {ik_response.possible_aim_joint_state[0]}"
-        )
-
-        # Step 3: Joint State Collision Check
-        collision_request = JointStateCollision.Request()
-        collision_request.joint_state = ik_response.possible_aim_joint_state
-        collision_request.gripper_distance = ik_response.gripper_distance
-        collision_request.planning_scene = self.data_planning_scene
-
-        collision_response = await self.call_service(
-            self.client_joint_state_collision, collision_request
-        )
-        if not collision_response or not collision_response.possible_joint_state:
-            self.get_logger().warn("Collision detected in all IK solutions.")
-            return
-        self.get_logger().info(
-            f"Collision-free joint state: {collision_response.possible_joint_state[0]}"
-        )
-
-    ## CLIENT: PLAN AIM GRIP ############################################
-    async def command_plan_aim_grip(self):
-        if not self.client_aim_grip_plan.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Aim Grip Plan not available!")
-            return
-        if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
-            self.data_sorted_grasp_grip_pose
-        ):
-            self.log("No Best Grasp Data")
-            return
-
-        request = AimGripPlan.Request()
-        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
-        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
-
-        # Call
-        aim_grip_plan_response = await self.call_service(
-            self.client_aim_grip_plan, aim_grip_plan_response
-        )
-        if not aim_grip_plan_response:
-            return
-
-        # Response
-        self.passed_index = aim_grip_plan_response.passed_index
-        self.log(f"Plan Aim Grip Success with index: {self.passed_index}")
-
-    ## CLIENT: TRIGGER AIM ############################################
-    def command_trigger_aim(self):
-        self.log("Going to AIM")
-        self.service_trigger_and_wait(self.client_trigger_aim)
-
-    ## CLIENT: TRIGGER GRIP ###########################################
-    def command_trigger_grip(self):
-        self.srv_gripper_control_send_distance(distance_mm=50)
-        # future = self.client_trigger_grip.call_async(Trigger.Request())
-        self.log("Going to GRIP")
-        self.service_trigger_and_wait(self.client_trigger_grip)
-
-        self.log("Gripping...")
-        # self.srv_gripper_control_send_distance(
-        #     distance_mm=self.data_sorted_grasp_gripper_distance[self.passed_index]
-        # )
-
-    ## CLIENT: PLAN HOME ###########################################
-    def command_plan_home(self):
-        self.log("Planning to HOME")
-        self.service_trigger_and_wait(self.client_home_plan)
-
-    ## CLIENT: TRIGGER HOME ###########################################
-    def command_trigger_home(self):
-        self.log("Going to HOME")
-        self.service_trigger_and_wait(self.client_trigger_home)
-
-    ## CLIENT: ATTACH OBJECT ###########################################
-    def command_attach_object(self):
-        self.log("Attach Object")
-        self.service_trigger_and_wait(self.client_attach)
-
-    ## CLIENT: DETACH OBJECT ###########################################
-    def command_detach_object(self):
-        self.log("Detach ObjectE")
-        self.service_trigger_and_wait(self.client_detach)
-
-    ## CLIENT: GRIPPER CONTROL ########################################
-    async def srv_gripper_control_send_distance(self, distance_mm):
-        if not self.client_gripper_control.wait_for_service(timeout_sec=3.0):
-            self.elog("Service Gripper Control not available!")
-            return
-
-        request = Gripper.Request()
-        request.gripper_distance = int(distance_mm)
-
-        # Call
-        gripper_response = await self.call_service(self.client_gripper_control, request)
-        if not gripper_response:
-            return
-        self.log(f"Sent distance Success")
-
-    ## GRIPPER OPEN ###########################################
-    def command_gripper_open(self):
-        self.srv_gripper_control_send_distance(distance_mm=55)
-
-    ## GRIPPER CLOSE ########################################
-    def command_gripper_close(self):
-        self.srv_gripper_control_send_distance(distance_mm=0)
-
-    ## FAKE POINT CLOUD ########################################
-    def command_fake_point_cloud(self):
-        self.data_pointcloud = fake_utils.get_random_pointcloud()
-        self.pub_captured_pointcloud.publish(self.data_pointcloud)
-
-    ## FAKE OBJECT POSE ########################################
-    def command_fake_object_pose(self):
-        self.data_object_pose = fake_utils.get_random_pose_stamped()
-        self.data_object_pose.pose.position.z += 0.8
-        self.pub_object_pose.publish(self.data_object_pose)
-        self.call_make_stl_collision()
 
     ## CLIENT: FUSE POINTCLOUD ########################################
     async def command_fuse_pointcloud(self):
@@ -1116,11 +625,11 @@ class MainNode(Node):
         if not self.client_camera_ik_joint_state.wait_for_service(timeout_sec=3.0):
             self.elog("Service Camera IK Joint State not available!")
             return
-        
+
         if not self.client_move_joint_pose.wait_for_service(timeout_sec=3.0):
             self.elog("Service Move Joint Pose not available!")
             return
-        
+
         request_get_planning_scene = GetPlanningScene.Request()
         request_get_planning_scene.components.components = (
             PlanningSceneComponents.SCENE_SETTINGS
@@ -1138,9 +647,7 @@ class MainNode(Node):
 
         # Response Planning Scene
         self.data_planning_scene = planning_scene_response.scene
-        self.log(
-            f"Received Planning Scene of type: {type(self.data_planning_scene)}."
-        )
+        self.log(f"Received Planning Scene of type: {type(self.data_planning_scene)}.")
 
         # Camera IK
         request_camera_joint_state = CameraIKJointState.Request()
@@ -1154,10 +661,15 @@ class MainNode(Node):
         )
         if not camera_ik_joint_state_response:
             return
-        
-        print(camera_ik_joint_state_response)
 
-        for camera_capture_joint_state in camera_ik_joint_state_response.moving_joint_state:
+        # Response
+        self.log(
+            f"Received Camera IK Response with len: {len(camera_ik_joint_state_response.moving_joint_state)}."
+        )
+
+        for (
+            camera_capture_joint_state
+        ) in camera_ik_joint_state_response.moving_joint_state:
 
             req_move_joint = JointPose.Request()
             req_move_joint.joint_state = camera_capture_joint_state
@@ -1170,16 +682,34 @@ class MainNode(Node):
             )
             if not move_joint_response:
                 return
-            
+
+            # Response
             self.log(f"Move Joint -> success : {move_joint_response.success}")
 
             await asyncio.sleep(1)
 
-            self.command_capture_to_fuse()
+            if self.capture_index is None:
+                self.capture_index = 0
+                self.command_capture_to_fuse(new_folder=True)
+            else:
+                self.capture_index += 1
+                self.command_capture_to_fuse(new_folder=False)
             # break
-
+        
         await asyncio.sleep(2)
         await self.command_fuse_pointcloud()
+
+        self.capture_index = None
+
+    ## CLIENT: PLAN HOME ###########################################
+    def command_plan_home(self):
+        self.log("Planning to HOME")
+        self.service_trigger_and_wait(self.client_home_plan)
+
+    ## CLIENT: TRIGGER HOME ###########################################
+    def command_trigger_home(self):
+        self.log("Going to HOME")
+        self.service_trigger_and_wait(self.client_trigger_home)
 
 
 def main(args=None):

@@ -21,9 +21,9 @@ setup(
     entry_points={
         "console_scripts": [
             "main = main_pkg.main:main",
-            "socket_client_example = main_pkg.socket_client_example:main",
-            "socket_client_pe = main_pkg.socket_client_pe:main",
-            "dataset_capture = main_pkg.dataset_capture:main"
+            "dataset_capture = main_pkg.dataset_capture:main",
+            "custom_joint_state_publisher_gui = main_pkg.custom_joint_state_publisher_gui:main",
+            "dataset_fusing_capture = main_pkg.dataset_fusing_capture:main",
         ],
     },
 )

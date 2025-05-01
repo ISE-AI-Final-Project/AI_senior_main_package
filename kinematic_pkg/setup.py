@@ -25,6 +25,8 @@ setup(
             'ik = kinematic_pkg.ik:main',
             'ik_joint_pub = kinematic_pkg.ik_joint_pub:main',
             'ik_server = kinematic_pkg.ik_server:main',
+            'ik_camera_pose_pub = kinematic_pkg.ik_camera_pose_pub:main',
+
         ],
     },
 )

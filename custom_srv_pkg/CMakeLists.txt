@@ -36,6 +36,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/JointStateCollision.srv"
   "srv/TargetObjectSend.srv"
   "srv/JointPose.srv"
+  "srv/CameraIKJointState.srv"
+
 
   DEPENDENCIES std_msgs
   DEPENDENCIES sensor_msgs
