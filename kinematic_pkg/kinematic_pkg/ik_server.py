@@ -9,7 +9,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
-from custom_srv_pkg.srv import IKJointState
+from custom_srv_pkg.srv import CameraIKJointState, IKJointState
 from main_pkg.utils import utils
 
 
@@ -24,6 +24,12 @@ class UR3eIKNode(Node):
             IKJointState, "joint_state_from_ik", self.ik_joint_state_callback
         )
 
+        self.service_camera_ik_jointstate = self.create_service(
+            CameraIKJointState,
+            "camera_joint_state_from_ik",
+            self.simple_camera_ik_joint_state_callback,
+        )
+
         # self.joint_pose_pub = self.create_publisher(PoseArray, "joint_pose_from_ik", 10)
 
         self.joint_names = [
@@ -34,7 +40,16 @@ class UR3eIKNode(Node):
             "wrist_2_joint",
             "wrist_3_joint",
             "robotiq_hande_left_finger_joint",
-            "robotiq_hande_left_finger_joint",
+            "robotiq_hande_right_finger_joint",
+        ]
+
+        self.joint_names_no_gripper = [
+            "shoulder_pan_joint",
+            "shoulder_lift_joint",
+            "elbow_joint",
+            "wrist_1_joint",
+            "wrist_2_joint",
+            "wrist_3_joint",
         ]
 
         self.get_logger().info("UR3e IK Node initialized")
@@ -74,6 +89,42 @@ class UR3eIKNode(Node):
     def dh_matrix_joint(self, joint=0, joint_angle=0):
         a, alpha, d, theta_offset = self.dh_params[joint]
         return self.dh_matrix(a, alpha, d, joint_angle + theta_offset)
+
+    def make_nearest_joint_state_rotation(
+        self, starting_joint_state, target_joint_state, include_gripper=True
+    ):
+        joint_limit_list = [
+            (2 * np.pi),
+            (2 * np.pi),
+            (np.pi),
+            (2 * np.pi),
+            (2 * np.pi),
+            (np.pi),
+        ]
+
+        nearest_joint_state_list = []
+
+        for starting_joint, target_joint, joint_limit in zip(
+            starting_joint_state[:6], target_joint_state[:6], joint_limit_list
+        ):
+            alternative_target_joint = (2 * np.pi) - target_joint
+
+            if np.abs(target_joint) > joint_limit:
+                target_joint = 9999
+            if np.abs(alternative_target_joint) > joint_limit:
+                alternative_target_joint = 9999
+
+            if np.abs(target_joint - starting_joint) < np.abs(
+                alternative_target_joint - starting_joint
+            ):
+                nearest_joint_state_list.append(target_joint)
+            else:
+                nearest_joint_state_list.append(alternative_target_joint)
+
+        if include_gripper:
+            return nearest_joint_state_list + list(starting_joint_state[-2:])
+        else:
+            return nearest_joint_state_list
 
     def ik(self, pose_wrt_base: PoseStamped, combination):
         try:
@@ -189,9 +240,10 @@ class UR3eIKNode(Node):
 
             R_ik = T_ik[:3, :3]
 
-            nx_ik = R_ik[:, 0]
-            ny_ik = R_ik[:, 1]
-            nx_e = R[:, 0]
+            nx_ik = R_ik[:, 0] / np.linalg.norm(R_ik[:, 0])
+            ny_ik = R_ik[:, 1] / np.linalg.norm(R_ik[:, 1])
+            nx_e = R[:, 0] / np.linalg.norm(R[:, 0])
+            # ny_e = R[:, 1]
 
             # Calculate theta5
             theta5 = np.arctan2(np.dot(ny_ik, nx_e), np.dot(nx_ik, nx_e))
@@ -203,8 +255,8 @@ class UR3eIKNode(Node):
                 theta3,
                 theta4,
                 theta5,
-                0.0,
-                0.0,
+                0.025,  # robotiq_hande_left_finger_joint
+                0.025,  # robotiq_hande_right_finger_joint
             ]
 
         except Exception as e:
@@ -244,7 +296,13 @@ class UR3eIKNode(Node):
                         # Output Joint with offset
                         msg = JointState()
                         msg.name = self.joint_names
-                        msg.position = aim_joint_state_by_ik
+
+                        # Get nearest joint rotation based on current joint state
+                        nearest_aim_joint_state_by_ik = self.make_nearest_joint_state_rotation(
+                            starting_joint_state=request.current_joint_state.position,
+                            target_joint_state=aim_joint_state_by_ik,
+                        )
+                        msg.position = nearest_aim_joint_state_by_ik
                         response.possible_aim_joint_state.append(msg)
                         response.gripper_distance.append(gripper_distance)
 
@@ -254,6 +312,177 @@ class UR3eIKNode(Node):
             f"IK Results: {len(request.sorted_aim_poses.poses)} Grasp Poses Received. {len(response.possible_aim_joint_state)} Joint States usable."
         )
 
+        return response
+
+    def camera_ik_joint_state_callback(
+        self, request: CameraIKJointState.Request, response: CameraIKJointState.Response
+    ):
+        starting_joint_state_list = request.current_joint_state.position
+
+        # Find T end
+        starting_joint = list(starting_joint_state_list[:6]) + [0.0]
+        T_end = np.eye(4)
+        for i in range(7):
+            a, alpha, d, theta_offset = self.dh_params[i]
+            theta = starting_joint[i] + theta_offset
+            T_i = self.dh_matrix(a, alpha, d, theta)
+            T_end = T_end @ T_i
+
+        T_end_posestamp = utils.ht_to_posestamped(T_end, frame_id="base")
+
+        # self.get_logger().info(str(starting_joint_state_list))
+        # self.get_logger().info(str(T_end_posestamp))
+
+        # Extend DH parameters to camera center (a, alpha, d, theta_offset)
+        dh_params_extend_to_cam_center = [
+            # (0.07, 0, 0, 0),
+            (0.0, 0, 0.0, np.pi / 2),  # Rotate to Y
+            (0.5, 0, -0.20, 0),
+            (0.0, 0, 0.0, -np.pi / 2),  # Rotate to Y back
+            # (0.0, 0, 0.0, 0.3),  # Rotate to Y
+        ]
+        T_cam_center = T_end.copy()
+        for a, alpha, d, theta_offset in dh_params_extend_to_cam_center:
+            T_i = self.dh_matrix(a, alpha, d, theta_offset)
+            T_cam_center = T_cam_center @ T_i
+
+        # 4 Cam pose for rotation
+        dh_params_cam_rotate = [
+            (0.0, 0, 0.0, 0.15),
+            (0.0, 0, 0.0, -0.15),
+            (0.0, 0.15, 0.10, 0.0),
+            (0.0, -0.15, -0.10, 0.0),
+        ]
+
+        # Give PoseStamp of rotated EE
+        rotated_ee_pose_list = []
+        for a, alpha, d, theta_offset in dh_params_cam_rotate:
+            T_i = self.dh_matrix(a, alpha, d, theta_offset)
+            T_rotated = T_cam_center @ T_i
+
+            # Get rotated EE
+            T_end_rotated = T_rotated.copy()
+            for a, alpha, d, theta_offset in dh_params_extend_to_cam_center[::-1]:
+                T_i = self.dh_matrix(a, alpha, d, theta_offset)
+                T_end_rotated = T_end_rotated @ utils.inverse_ht(T_i)
+
+            rotated_ee_pose_list.append(
+                utils.ht_to_posestamped(T_end_rotated, frame_id="base")
+            )
+
+        # Find IK for T_end and which combination result in current joint state
+        # combinations = list(itertools.product([1, -1], repeat=3))
+        # for combination in combinations:
+        #     # self.get_logger().info(str(combination))
+
+        #     current_joint_state_by_ik = self.ik(
+        #         pose_wrt_base=T_end_posestamp, combination=combination
+        #     )
+
+        #     if current_joint_state_by_ik is None:
+        #         continue
+
+        #     for s_j, ik_j in zip(
+        #         starting_joint_state_list[:6], current_joint_state_by_ik[:6]
+        #     ):
+        #         # self.get_logger().info(str(s_j) +" "+ str(ik_j))
+        #         s_j = [(2 * np.pi) + s_j, s_j][s_j >= 0]
+        #         ik_j = [(2 * np.pi) + ik_j, ik_j][ik_j >= 0]
+        #         # self.get_logger().info(str(s_j) +" "+ str(ik_j))
+        #         if np.abs(s_j - ik_j) > 1e-3:
+        #             break
+        #     else:
+        #         self.get_logger().info("Passed!!!" + str(combination))
+
+        #         for rotated_ee_pose in rotated_ee_pose_list:
+        #             joint_state_rotated_camera = self.ik(
+        #                 pose_wrt_base=rotated_ee_pose, combination=combination
+        #             )
+
+        #             if joint_state_rotated_camera:
+        #                 msg = JointState()
+        #                 msg.name = self.joint_names_no_gripper
+
+        #                 nearest_joint_state_rotated_camera = (
+        #                     self.make_nearest_joint_state_rotation(
+        #                         starting_joint_state=starting_joint_state_list,
+        #                         target_joint_state=joint_state_rotated_camera,
+        #                         include_gripper=False,
+        #                     )
+        #                 )
+        #                 msg.position = nearest_joint_state_rotated_camera
+        #                 response.moving_joint_state.append(msg)
+        #         break
+
+        # Find IK for T_end and which combination result in current joint state
+        combinations = list(itertools.product([1, -1], repeat=3))
+
+        starting_joint_state_list
+
+        for rotated_ee_pose in rotated_ee_pose_list:
+            for combination in combinations:
+                nearest_joint_list = []
+
+                joint_state_rotated_camera = self.ik(
+                    pose_wrt_base=rotated_ee_pose, combination=combination
+                )
+
+                if joint_state_rotated_camera is None:
+                    continue
+
+                for s_j, ik_j in zip(
+                    starting_joint_state_list[:6], joint_state_rotated_camera[:6]
+                ):
+                    alt_ik_j = (2 * np.pi) + ik_j
+                    if (
+                        np.abs(s_j - ik_j) < np.pi / 2
+                        or np.abs(s_j - alt_ik_j) < np.pi / 2
+                    ):
+                        if np.abs(s_j - ik_j) < np.abs(s_j - alt_ik_j):
+                            nearest_joint_list.append(ik_j)
+                        else:
+                            nearest_joint_list.append(alt_ik_j)
+                        continue
+                    else:
+                        # A joint rotate too much
+                        break
+                else:
+                    msg = JointState()
+                    msg.name = self.joint_names_no_gripper
+                    msg.position = nearest_joint_list
+                    response.moving_joint_state.append(msg)
+                    self.get_logger().info(msg)
+                    break
+
+        response.moving_joint_state.append(request.current_joint_state)
+        self.get_logger().info(
+            f"Returning capture pose with {len(response.moving_joint_state)} poses."
+        )
+        return response
+
+    def simple_camera_ik_joint_state_callback(
+        self, request: CameraIKJointState.Request, response: CameraIKJointState.Response
+    ):
+        starting_joint_state = request.current_joint_state.position
+
+        joint_offset_list = [
+            (0, 0, 0, 0, np.pi / 12, 0, 0, 0),
+            (0, 0, 0, 0, -np.pi / 12, 0, 0, 0),
+            (0, 0, 0, 0, 0, np.pi / 8, 0, 0),
+            (0, 0, 0, 0, 0, -np.pi / 8, 0, 0),
+        ]
+
+        for joint_offset in joint_offset_list:
+            msg = JointState()
+            msg.name = self.joint_names
+            msg.position = list(np.array(starting_joint_state) + np.array(joint_offset))
+            response.moving_joint_state.append(msg)
+            self.get_logger().info(str(msg))
+
+        response.moving_joint_state.append(request.current_joint_state)
+        self.get_logger().info(
+            f"Returning capture pose with {len(response.moving_joint_state)} poses."
+        )
         return response
 
 

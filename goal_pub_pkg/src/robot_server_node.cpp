@@ -43,6 +43,15 @@ std::map<std::string, double> home_joint_values = {
     {"wrist_2_joint", 0},
     {"wrist_3_joint", 0}};
 
+std::set<std::string> allowed_joints = {
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+};
+
 void handle_aim_grip_request(
     const std::shared_ptr<AimGripPlan::Request> request,
     std::shared_ptr<AimGripPlan::Response> response)
@@ -277,8 +286,30 @@ void handle_joint_pose_request(
     std::map<std::string, double> joint_goal;
     for (size_t i = 0; i < js.name.size(); ++i)
     {
-        joint_goal[js.name[i]] = js.position[i];
+        if (allowed_joints.count(js.name[i]))
+        {
+            joint_goal[js.name[i]] = js.position[i];
+            RCLCPP_INFO(LOGGER, "Added joint %s: %.4f", js.name[i].c_str(), js.position[i]);
+        }
+        else
+        {
+            RCLCPP_INFO(LOGGER, "Skipped joint %s", js.name[i].c_str());
+        }
     }
+
+    // std::map<std::string, double> joint_goal;
+    // for (size_t i = 0; i < js.name.size(); ++i)
+    // {
+    //     joint_goal[js.name[i]] = js.position[i];
+    // }
+
+    // // Print full joint_goal map
+    // RCLCPP_INFO(LOGGER, "Full joint goal:");
+    // for (const auto &pair : joint_goal)
+    // {
+    //     RCLCPP_INFO(LOGGER, "  %s: %.4f", pair.first.c_str(), pair.second);
+    // }
+
 
     move_group->setJointValueTarget(joint_goal);
 

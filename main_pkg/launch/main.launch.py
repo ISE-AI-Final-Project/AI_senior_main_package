@@ -30,4 +30,6 @@ def generate_launch_description():
         color_log_node('collision_stl', 'stl_collision_loader', 'stl_collision_node', '\033[38;5;81m'),  # Light Blue
         color_log_node('colliding_links_checker', 'joint_state_filter_server', 'joint_state_filter_server', '\033[38;5;119m'), 
         color_log_node('kinematic_pkg', 'ik_server', 'ik_server', '\033[38;5;99m'),
+        color_log_node('pcl_fuse', 'pcl_to_depth_min_server', 'pcl_to_depth_min_server', '\033[38;5;150m'),
+
     ])
