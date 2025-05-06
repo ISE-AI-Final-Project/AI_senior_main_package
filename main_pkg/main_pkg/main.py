@@ -72,7 +72,38 @@ class MainNode(Node):
         param_descriptor = ParameterDescriptor(
             name="target_obj",
             type=ParameterType.PARAMETER_STRING,
+<<<<<<< Updated upstream
             description="A sample parameter",
+=======
+            description="Target Object",
+        )
+        self.declare_parameter(
+            "target_obj", "sunscreen", descriptor=param_descriptor_target_object
+        )
+
+        param_descriptor_dataset_path_prefix = ParameterDescriptor(
+            name="dataset_path_prefix",
+            type=ParameterType.PARAMETER_STRING,
+            description="Path to dataset folder containing CAD file of object and templates.",
+        )
+
+        self.declare_parameter(
+            "dataset_path_prefix",
+            "/home/tunyaluck/output",
+            descriptor=param_descriptor_dataset_path_prefix,
+        )
+
+        param_descriptor_output_path_prefix = ParameterDescriptor(
+            name="output_path_prefix",
+            type=ParameterType.PARAMETER_STRING,
+            description="Path to folder for output files.",
+        )
+
+        self.declare_parameter(
+            "output_path_prefix",
+            "/home/tunyaluck/output",
+            descriptor=param_descriptor_output_path_prefix,
+>>>>>>> Stashed changes
         )
         self.declare_parameter("target_obj", "sunscreen", descriptor=param_descriptor)
 
