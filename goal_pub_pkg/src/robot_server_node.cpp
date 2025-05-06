@@ -52,61 +52,106 @@ std::set<std::string> allowed_joints = {
     "wrist_3_joint"
 };
 
+// void handle_aim_grip_request(
+//     const std::shared_ptr<AimGripPlan::Request> request,
+//     std::shared_ptr<AimGripPlan::Response> response)
+// {
+//     const auto &aim_poses = request->sorted_aim_poses.poses;
+//     const auto &grip_poses = request->sorted_grip_poses.poses;
+
+//     if (aim_poses.size() != grip_poses.size())
+//     {
+//         RCLCPP_WARN(LOGGER, "Aim and grip pose arrays must have the same size.");
+//         response->passed_index = -1;
+//         return;
+//     }
+
+//     for (size_t i = 0; i < aim_poses.size(); ++i)
+//     {
+//         RCLCPP_INFO(LOGGER, "Checking pose pair #%zu", i);
+
+//         // Remove Collision
+//         auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+//         auto result = client_remove->async_send_request(request);
+//         RCLCPP_INFO(LOGGER, "Removing Collision");
+//         rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
+//         move_group->setPoseTarget(grip_poses[i]);
+//         bool plan_aim = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+//         if (!plan_aim)
+//             continue;
+//         const moveit::core::LinkModel *ee_link_model =
+//             move_group->getRobotModel()->getLinkModel(move_group->getEndEffectorLink());
+//         visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
+//         visual_tools->trigger();
+
+//         // Add Collision
+//         auto request2 = std::make_shared<std_srvs::srv::Trigger::Request>();
+//         auto result2 = client_add->async_send_request(request2);
+//         RCLCPP_INFO(LOGGER, "Adding Collision");
+//         rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
+//         move_group->setPoseTarget(aim_poses[i]);
+//         bool plan_grip = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+//         if (!plan_grip)
+//             continue;
+//         RCLCPP_INFO(LOGGER, "Valid pair found at index %zu", i);
+//         successful_aim_pose = aim_poses[i];
+//         successful_grip_pose = grip_poses[i];
+//         visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
+//         visual_tools->trigger();
+
+//         response->passed_index = static_cast<int8_t>(i);
+//         double_plan = true;
+//         return;
+//     }
+
+//     RCLCPP_WARN(LOGGER, "No valid plan for any pair of poses.");
+//     response->passed_index = -1;
+// }
+
 void handle_aim_grip_request(
     const std::shared_ptr<AimGripPlan::Request> request,
     std::shared_ptr<AimGripPlan::Response> response)
 {
     const auto &aim_poses = request->sorted_aim_poses.poses;
+    const auto &aim_joint_states = request->aim_joint_states;
     const auto &grip_poses = request->sorted_grip_poses.poses;
 
-    if (aim_poses.size() != grip_poses.size())
+    if (aim_poses.size() != aim_joint_states.size())
     {
-        RCLCPP_WARN(LOGGER, "Aim and grip pose arrays must have the same size.");
+        RCLCPP_WARN(LOGGER, "Mismatch between aim poses and joint states size.");
         response->passed_index = -1;
         return;
     }
 
-    for (size_t i = 0; i < aim_poses.size(); ++i)
+    for (size_t i = 0; i < aim_joint_states.size(); ++i)
     {
-        RCLCPP_INFO(LOGGER, "Checking pose pair #%zu", i);
+        RCLCPP_INFO(LOGGER, "Checking joint state #%zu", i);
 
-        // Remove Collision
-        auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
-        auto result = client_remove->async_send_request(request);
-        RCLCPP_INFO(LOGGER, "Removing Collision");
-        rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+        const auto &joint_state = aim_joint_states[i];
+        std::map<std::string, double> joint_values;
 
-        move_group->setPoseTarget(grip_poses[i]);
-        bool plan_aim = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-        if (!plan_aim)
-            continue;
-        const moveit::core::LinkModel *ee_link_model =
-            move_group->getRobotModel()->getLinkModel(move_group->getEndEffectorLink());
-        visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
-        visual_tools->trigger();
+        for (size_t j = 0; j < joint_state.name.size(); ++j)
+        {
+            joint_values[joint_state.name[j]] = joint_state.position[j];
+        }
 
-        // Add Collision
-        auto request2 = std::make_shared<std_srvs::srv::Trigger::Request>();
-        auto result2 = client_add->async_send_request(request2);
-        RCLCPP_INFO(LOGGER, "Adding Collision");
-        rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+        move_group->setJointValueTarget(joint_values);
+        bool success = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
-        move_group->setPoseTarget(aim_poses[i]);
-        bool plan_grip = (move_group->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-        if (!plan_grip)
-            continue;
-        RCLCPP_INFO(LOGGER, "Valid pair found at index %zu", i);
-        successful_aim_pose = aim_poses[i];
-        successful_grip_pose = grip_poses[i];
-        visual_tools->publishTrajectoryLine(my_plan.trajectory_, ee_link_model, joint_model_group, rviz_visual_tools::LIME_GREEN);
-        visual_tools->trigger();
-
-        response->passed_index = static_cast<int8_t>(i);
-        double_plan = true;
-        return;
+        if (success)
+        {
+            RCLCPP_INFO(LOGGER, "Valid joint plan found at index %zu", i);
+            successful_aim_pose = aim_poses[i];
+            successful_grip_pose = grip_poses[i];
+            response->passed_index = static_cast<int8_t>(i);
+            double_plan = true;
+            return;
+        }
     }
 
-    RCLCPP_WARN(LOGGER, "No valid plan for any pair of poses.");
+    RCLCPP_WARN(LOGGER, "No valid plan found for any joint state.");
     response->passed_index = -1;
 }
 

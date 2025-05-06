@@ -1,4 +1,5 @@
 geometry_msgs/PoseArray sorted_aim_poses # Aim Poses before grip, sorted by scores
 geometry_msgs/PoseArray sorted_grip_poses # Grip Poses sort by scores
+sensor_msgs/JointState[] aim_joint_states
 ---
 int8 passed_index # Return first index that pass
