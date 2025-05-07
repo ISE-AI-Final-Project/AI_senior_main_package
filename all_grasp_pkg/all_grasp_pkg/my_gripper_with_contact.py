@@ -1,4 +1,5 @@
 import copy
+
 import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
@@ -16,6 +17,7 @@ class MyGripperWithContact:
         back_width,
         back_height,
         contact_thickness,
+        gripper_in_offset=0,
         skeleton_radius=1,
     ):
         self.hand_width = hand_width
@@ -27,6 +29,7 @@ class MyGripperWithContact:
         self.contact_thickness = contact_thickness
         self.back_width = back_width
         self.back_height = back_height
+        self.gripper_in_offset = gripper_in_offset
         self.skeleton_radius = skeleton_radius
 
         self.color = (1, 0, 0)
@@ -36,7 +39,7 @@ class MyGripperWithContact:
                 (
                     0,
                     gripper_max_d / 2 + hand_thickness / 2 + contact_thickness / 2,
-                    -hand_length / 2,
+                    -hand_length / 2 + gripper_in_offset,
                 )
             ),
             R=np.identity(3),
@@ -48,7 +51,7 @@ class MyGripperWithContact:
                 (
                     0,
                     -(gripper_max_d / 2 + hand_thickness / 2 + contact_thickness / 2),
-                    -hand_length / 2,
+                    -hand_length / 2 + gripper_in_offset,
                 )
             ),
             R=np.identity(3),
@@ -60,7 +63,7 @@ class MyGripperWithContact:
                 (
                     0,
                     gripper_max_d / 2,
-                    -hand_length / 2,
+                    -hand_length / 2 + gripper_in_offset,
                 )
             ),
             R=np.identity(3),
@@ -72,7 +75,7 @@ class MyGripperWithContact:
                 (
                     0,
                     -gripper_max_d / 2,
-                    -hand_length / 2,
+                    -hand_length / 2 + gripper_in_offset,
                 )
             ),
             R=np.identity(3),
@@ -80,7 +83,7 @@ class MyGripperWithContact:
         )
 
         self.obb_gripper_range = o3d.geometry.OrientedBoundingBox(
-            center=np.array((0, 0, -hand_length - back_thickness / 2)),
+            center=np.array((0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)),
             R=np.identity(3),
             extent=np.array(
                 (
@@ -92,7 +95,7 @@ class MyGripperWithContact:
         )
 
         self.obb_back = o3d.geometry.OrientedBoundingBox(
-            center=np.array((0, 0, -hand_length - back_thickness / 2)),
+            center=np.array((0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)),
             R=np.identity(3),
             extent=np.array(
                 (
@@ -395,6 +398,7 @@ if __name__ == "__main__":
         back_width=20,
         back_height=20,
         contact_thickness=1,
+        gripper_in_offset=2,
         skeleton_radius=0.5,
     )
 

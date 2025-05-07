@@ -104,22 +104,30 @@ class UR3eIKNode(Node):
 
         nearest_joint_state_list = []
 
-        for starting_joint, target_joint, joint_limit in zip(
+        for start, target, limit in zip(
             starting_joint_state[:6], target_joint_state[:6], joint_limit_list
         ):
-            alternative_target_joint = (2 * np.pi) - target_joint
+            # three candidates: nominal, +2π wrap, and –2π wrap
+            cands = [
+                target,
+                target + 2*np.pi,
+                target - 2*np.pi
+            ]
 
-            if np.abs(target_joint) > joint_limit:
-                target_joint = 9999
-            if np.abs(alternative_target_joint) > joint_limit:
-                alternative_target_joint = 9999
+            # apply limit: mark out‐of‐bounds candidates as “bad”
+            for i, c in enumerate(cands):
+                if abs(c) > limit:
+                    cands[i] = np.nan  # or 9999 if you really need a numeric sentinel
 
-            if np.abs(target_joint - starting_joint) < np.abs(
-                alternative_target_joint - starting_joint
-            ):
-                nearest_joint_state_list.append(target_joint)
-            else:
-                nearest_joint_state_list.append(alternative_target_joint)
+            # choose the candidate with the smallest distance to start (ignoring NaNs)
+            diffs = [abs(c - start) if not np.isnan(c) else np.inf for c in cands]
+            best = cands[int(np.argmin(diffs))]
+
+            # if all were invalid, you can choose to fall back to your sentinel
+            if np.isnan(best):
+                best = 9999
+
+            nearest_joint_state_list.append(best)
 
         if include_gripper:
             return nearest_joint_state_list + list(starting_joint_state[-2:])
@@ -266,6 +274,12 @@ class UR3eIKNode(Node):
     def ik_joint_state_callback(
         self, request: IKJointState.Request, response: IKJointState.Response
     ):
+        
+        response.sorted_aim_poses = PoseArray()
+        response.sorted_aim_poses.header.frame_id = "world"
+        response.sorted_grip_poses = PoseArray()
+        response.sorted_grip_poses.header.frame_id = "world"
+
 
         for aim_pose_world, grip_pose_world, gripper_distance in zip(
             request.sorted_aim_poses.poses,
@@ -294,17 +308,29 @@ class UR3eIKNode(Node):
 
                     if grip_joint_state_by_ik:
                         # Output Joint with offset
-                        msg = JointState()
-                        msg.name = self.joint_names
+                        msg_aim = JointState()
+                        msg_aim.name = self.joint_names
 
                         # Get nearest joint rotation based on current joint state
                         nearest_aim_joint_state_by_ik = self.make_nearest_joint_state_rotation(
                             starting_joint_state=request.current_joint_state.position,
                             target_joint_state=aim_joint_state_by_ik,
                         )
-                        msg.position = nearest_aim_joint_state_by_ik
-                        response.possible_aim_joint_state.append(msg)
+                        msg_aim.position = nearest_aim_joint_state_by_ik
+
+                        # msg_aim.position = aim_joint_state_by_ik
+                        response.possible_aim_joint_state.append(msg_aim)
+
                         response.gripper_distance.append(gripper_distance)
+
+                        response.sorted_aim_poses.poses.append(aim_pose_world)
+                        response.sorted_grip_poses.poses.append(grip_pose_world)
+
+                        # Grip Joint State
+                        msg_grip = JointState()
+                        msg_grip.name = self.joint_names
+                        msg_grip.position = grip_joint_state_by_ik
+                        response.possible_grip_joint_state.append(msg_grip)
 
             # print("==============")
 
@@ -468,8 +494,8 @@ class UR3eIKNode(Node):
         joint_offset_list = [
             (0, 0, 0, 0, np.pi / 12, 0, 0, 0),
             (0, 0, 0, 0, -np.pi / 12, 0, 0, 0),
-            (0, 0, 0, 0, 0, np.pi / 8, 0, 0),
-            (0, 0, 0, 0, 0, -np.pi / 8, 0, 0),
+            (0, 0, 0, 0, 0, np.pi / 12, 0, 0),
+            (0, 0, 0, 0, 0, -np.pi / 12, 0, 0),
         ]
 
         for joint_offset in joint_offset_list:

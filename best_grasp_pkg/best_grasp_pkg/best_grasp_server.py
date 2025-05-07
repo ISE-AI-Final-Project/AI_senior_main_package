@@ -82,7 +82,7 @@ class BestGraspService(Node):
 
 
         grip_in_offset = Pose()
-        grip_in_offset.position.z = +0.02  # 2 cm inward
+        grip_in_offset.position.z = +0.01 # 1 cm inward
 
         grasp_candidates = []
         for i, (grasp_msg, grasp_grip_end) in enumerate(transformed_grasps):
@@ -94,7 +94,7 @@ class BestGraspService(Node):
             grasp_aim = chain_poses(gripper_offset, grasp_aim_end)
             grasp_grip = chain_poses(gripper_offset, grasp_grip_end)
             
-            # Offset inward by 2cm
+            # Offset inward by 1cm
             grasp_grip_end_in = chain_poses(grip_in_offset, grasp_grip_end)
 
             # Positions
@@ -127,9 +127,9 @@ class BestGraspService(Node):
             gravity_score = abs(
                 np.dot(z_axis, np.array([0, 0, -1]))
             )  # 1 when pointing downward
-            self.get_logger().info(f"gravity_score = {gravity_score}")
-            self.get_logger().info(f"d_to_com = {grasp_msg.d_to_com:.3f}")
-            self.get_logger().info(f"gripper_score = {grasp_msg.gripper_score:.3f}")
+            # self.get_logger().info(f"gravity_score = {gravity_score}")
+            # self.get_logger().info(f"d_to_com = {grasp_msg.d_to_com:.3f}")
+            # self.get_logger().info(f"gripper_score = {grasp_msg.gripper_score:.3f}")
 
             # Score: smaller grip distance + Z-down preference
             score = (
@@ -138,7 +138,7 @@ class BestGraspService(Node):
                 + 0.1 * (1 - (grasp_msg.d_to_com))  # closer to CoM
                 + 0.1 * grasp_msg.gripper_score  # gripper success prediction
             )
-            self.get_logger().info(f"score = {score}")
+            # self.get_logger().info(f"score = {score}")
             grasp_candidates.append(
                 (score, grasp_grip_end_in, grasp_aim_end, grasp_msg.grip_distance)
             )

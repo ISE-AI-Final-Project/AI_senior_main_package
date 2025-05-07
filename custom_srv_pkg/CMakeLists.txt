@@ -34,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/PCLFuse.srv"
   "srv/IKJointState.srv"
   "srv/JointStateCollision.srv"
+  "srv/JointStateCollisionBool.srv"
   "srv/TargetObjectSend.srv"
   "srv/JointPose.srv"
   "srv/CameraIKJointState.srv"

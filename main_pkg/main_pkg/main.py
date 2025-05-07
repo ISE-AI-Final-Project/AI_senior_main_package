@@ -15,7 +15,7 @@ from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneCompone
 from moveit_msgs.srv import GetPlanningScene
 from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
 from rclpy.node import Node
-from sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from sensor_msgs.msg import CameraInfo, Image, JointState, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header, String
 from std_srvs.srv import Trigger
@@ -32,6 +32,7 @@ from custom_srv_pkg.srv import (
     IMGSend,
     JointPose,
     JointStateCollision,
+    JointStateCollisionBool,
     PCLFuse,
     PCLMani,
     PointCloudSend,
@@ -80,6 +81,7 @@ class MainNode(Node):
             "fuse_pointcloud": self.command_fuse_pointcloud,
             "clear_pointcloud": self.command_clear_pointcloud,
             "auto_fuse_pointcloud": self.command_auto_fuse_pointcloud,
+            "fake_joint_state_pub": self.fake_joint_state_pub,
         }
 
         """
@@ -114,6 +116,10 @@ class MainNode(Node):
         self.data_array_depth = np.array([])
         self.capture_depth = False
 
+        # Fuse Depth
+        self.data_array_depth_fused = np.array([])
+        self.data_msg_depth_fused = Image()
+
         # ISM Result
         self.data_best_mask = np.array([])
         self.data_msg_best_mask = Image()
@@ -130,8 +136,16 @@ class MainNode(Node):
         self.data_sorted_grasp_grip_pose = PoseArray()
         self.data_sorted_grasp_gripper_distance = []
 
+        # Filter IK
+        self.data_aim_joint_state = []
+        self.data_sorted_grasp_aim_pose_filter = PoseArray()
+        self.data_sorted_grasp_grip_pose_filter = PoseArray()
+        self.data_sorted_grasp_gripper_distance_filter = []
+        self.data_aim_joint_state_filter = []
+
         self.passed_index = None
         self.capture_index = None
+        self.fake_joint_state_index = 0
 
         # Planning Scene
         self.data_planning_scene = PlanningScene()
@@ -253,6 +267,10 @@ class MainNode(Node):
             PointCloud2, "/main/pointcloud_raw", 10
         )
 
+        self.pub_fake_joint_state = self.create_publisher(
+            JointState, "/fake/joint_states", 10
+        )
+
         """
         ################### CLIENT ###########################
         """
@@ -271,8 +289,8 @@ class MainNode(Node):
         )
 
         self.client_ik_grasp = self.create_client(IKJointState, "joint_state_from_ik")
-        self.client_joint_state_collision = self.create_client(
-            JointStateCollision, "joint_state_collision_check"
+        self.client_joint_state_collision_bool = self.create_client(
+            JointStateCollisionBool, "joint_state_collision_check_bool"
         )
         self.client_get_planning_scene = self.create_client(
             GetPlanningScene, "/get_planning_scene"
@@ -374,7 +392,7 @@ class MainNode(Node):
             await future
             return future.result()
         except Exception as e:
-            self.get_logger().error(f"Service call failed: {e}")
+            self.elog(f"Service call failed: {e}")
             return None
 
     def call_make_stl_collision(self, object_pose=None):
@@ -464,6 +482,7 @@ class MainNode(Node):
         if self.capture_rgb:
             # Save Msg
             self.data_msg_rgb = msg
+            self.log("Index" + str(self.capture_index))
 
             # Convert to array
             try:
@@ -483,7 +502,9 @@ class MainNode(Node):
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name="rgb",
+                file_name=(f"rgb_{self.capture_index}", "rgb")[
+                    self.capture_index is None
+                ],
             )
 
             self.log("Captured RGB.")
@@ -526,7 +547,9 @@ class MainNode(Node):
                     self.node_run_folder_name,
                     self.capture_folder_name,
                 ),
-                file_name="depth",
+                file_name=(f"depth_{self.capture_index}", "depth")[
+                    self.capture_index is None
+                ],
             )
 
             self.log("Captured depth.")
@@ -562,8 +585,11 @@ class MainNode(Node):
 
     ## CLIENT: ISM ########################################
     def command_srv_req_ism(self):
-        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
-            self.elog("No RGB or Depth Data.")
+        if self.is_empty(self.data_array_rgb):
+            self.elog("No RGB Data.")
+            return
+        if self.is_empty(self.data_array_depth_fused):
+            self.elog("No Fused Depth.")
             return
 
         client_connected = self.client_ism.connect()
@@ -581,7 +607,7 @@ class MainNode(Node):
                     msg_type_in=["numpyarray", "numpyarray", "string", "string"],
                     msg_in=[
                         self.data_array_rgb,
-                        self.data_array_depth,
+                        self.data_array_depth_fused,
                         target_obj,
                         self.get_str_param("dataset_path_prefix"),
                     ],
@@ -627,6 +653,9 @@ class MainNode(Node):
         if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
             self.elog("No RGB or Depth Data. Capture First")
             return
+        if self.is_empty(self.data_array_depth_fused):
+            self.elog("No Fused Depth.")
+            return
 
         if self.is_empty(self.data_best_mask):
             self.elog("No Best Mask. Req ISM First.")
@@ -652,7 +681,7 @@ class MainNode(Node):
                 msg_in=[
                     self.data_best_mask,
                     self.data_array_rgb,
-                    self.data_array_depth,
+                    self.data_array_depth_fused,
                     target_obj,
                     self.get_str_param("dataset_path_prefix"),
                 ],
@@ -821,7 +850,7 @@ class MainNode(Node):
 
         # Call
         make_collision_with_mask_response = await self.call_service(
-            self.client_make_collision, req
+            self.client_make_collision_with_mask, req
         )
         if not make_collision_with_mask_response:
             return
@@ -873,13 +902,13 @@ class MainNode(Node):
     async def command_ik_grasp(self):
         # Wait for services to be available
         if not self.client_get_planning_scene.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /get_planning_scene not available!")
+            self.elog("Service /get_planning_scene not available!")
             return
         if not self.client_ik_grasp.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /ik_grasp not available!")
+            self.elog("Service /ik_grasp not available!")
             return
-        if not self.client_joint_state_collision.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error("Service /joint_state_collision not available!")
+        if not self.client_joint_state_collision_bool.wait_for_service(timeout_sec=3.0):
+            self.elog("Service /joint_state_collision not available!")
             return
 
         # Step 1: Get Planning Scene
@@ -896,7 +925,7 @@ class MainNode(Node):
         if not planning_scene_response:
             return
         self.data_planning_scene = planning_scene_response.scene
-        self.get_logger().info("Planning scene retrieved successfully.")
+        self.log("Planning scene retrieved successfully.")
 
         # Step 2: IK Grasp
         if not self.data_sorted_grasp_aim_pose or not self.data_sorted_grasp_grip_pose:
@@ -915,24 +944,85 @@ class MainNode(Node):
         if not ik_response or not ik_response.possible_aim_joint_state:
             self.get_logger().warn("No valid IK solutions found.")
             return
-        self.get_logger().info(
-            f"IK solution found: {ik_response.possible_aim_joint_state[0]}"
-        )
+        self.log(f"IK solution found: {ik_response.possible_aim_joint_state[0]}")
+
+        self.data_aim_joint_state = ik_response.possible_aim_joint_state
+
+        self.log(f"Data Aim Joint State Length {len(self.data_aim_joint_state)}")
 
         # Step 3: Joint State Collision Check
-        collision_request = JointStateCollision.Request()
-        collision_request.joint_state = ik_response.possible_aim_joint_state
-        collision_request.gripper_distance = ik_response.gripper_distance
-        collision_request.planning_scene = self.data_planning_scene
+        # Step 3.1: Aim Collision Check
+        collision_aim_request = JointStateCollisionBool.Request()
+        collision_aim_request.joint_state = ik_response.possible_aim_joint_state
+        collision_aim_request.planning_scene = self.data_planning_scene
 
-        collision_response = await self.call_service(
-            self.client_joint_state_collision, collision_request
+        collision_aim_response = await self.call_service(
+            self.client_joint_state_collision_bool, collision_aim_request
         )
-        if not collision_response or not collision_response.possible_joint_state:
-            self.get_logger().warn("Collision detected in all IK solutions.")
+        if not collision_aim_response:
+            self.get_logger().warn("Error in Aim Collision Check.")
             return
-        self.get_logger().info(
-            f"Collision-free joint state: {collision_response.possible_joint_state[0]}"
+        self.log(f"Aim Response: {collision_aim_response.pass_list}")
+
+        # Step 3.2: Grip Collision Check
+        collision_grip_request = JointStateCollisionBool.Request()
+        collision_grip_request.joint_state = ik_response.possible_grip_joint_state
+        collision_grip_request.planning_scene = self.data_planning_scene
+
+        collision_grip_response = await self.call_service(
+            self.client_joint_state_collision_bool, collision_grip_request
+        )
+        if not collision_grip_response:
+            self.get_logger().warn("Error in Grip Collision Check.")
+            return
+
+        self.log(f"Grip Response: {collision_grip_response.pass_list}")
+
+        # Output
+        filter_sorted_aim_posearray = PoseArray()
+        filter_sorted_aim_posearray.header.frame_id = "world"
+        filter_sorted_grip_posearray = PoseArray()
+        filter_sorted_grip_posearray.header.frame_id = "world"
+
+        filter_gripper_distance = []
+
+        filter_aim_joint_state = []
+
+        total_pass = 0
+        for i, (aim_pass, grip_pass) in enumerate(
+            zip(collision_aim_response.pass_list, collision_grip_response.pass_list)
+        ):
+
+            self.log(f"{i}, {aim_pass}, {grip_pass}")
+            if aim_pass and grip_pass:
+                self.log(f"{i} Passed")
+                self.log(f"{str(ik_response.sorted_aim_poses.poses[i])} Passed")
+                self.log(f"{ik_response.sorted_grip_poses.poses[i]} Passed")
+
+                self.log(f"{ik_response.gripper_distance[i]} Passed")
+                self.log(f"{ik_response.possible_aim_joint_state[i]} Passed")
+                filter_sorted_aim_posearray.poses.append(
+                    ik_response.sorted_aim_poses.poses[i]
+                )
+                filter_sorted_grip_posearray.poses.append(
+                    ik_response.sorted_grip_poses.poses[i]
+                )
+
+                filter_gripper_distance.append(ik_response.gripper_distance[i])
+
+                filter_aim_joint_state.append(ik_response.possible_aim_joint_state[i])
+                total_pass += 1
+
+            else:
+                self.log(f"{i} Failed")
+
+        self.data_aim_joint_state_filter = filter_aim_joint_state
+        self.data_sorted_grasp_aim_pose_filter = filter_sorted_aim_posearray
+        self.data_sorted_grasp_grip_pose_filter = filter_sorted_grip_posearray
+        self.data_sorted_grasp_gripper_distance_filter = filter_gripper_distance
+
+        self.log(
+            f"Total Pass Joint State: {total_pass} {self.data_aim_joint_state_filter}"
         )
 
     ## CLIENT: PLAN AIM GRIP ############################################
@@ -940,26 +1030,29 @@ class MainNode(Node):
         if not self.client_aim_grip_plan.wait_for_service(timeout_sec=3.0):
             self.elog("Service Aim Grip Plan not available!")
             return
-        if self.is_empty(self.data_sorted_grasp_aim_pose) or self.is_empty(
-            self.data_sorted_grasp_grip_pose
-        ):
-            self.log("No Best Grasp Data")
+        if self.is_empty(self.data_aim_joint_state_filter):
+            self.log("Filter with IK First.")
             return
 
         request = AimGripPlan.Request()
-        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose
-        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose
+        request.sorted_aim_poses = self.data_sorted_grasp_aim_pose_filter
+        request.sorted_grip_poses = self.data_sorted_grasp_grip_pose_filter
+        self.log(str(request))
+        request.aim_joint_states = self.data_aim_joint_state_filter
+        self.log(str(request))
 
         # Call
         aim_grip_plan_response = await self.call_service(
-            self.client_aim_grip_plan, aim_grip_plan_response
+            self.client_aim_grip_plan, request
         )
         if not aim_grip_plan_response:
             return
 
         # Response
         self.passed_index = aim_grip_plan_response.passed_index
-        self.log(f"Plan Aim Grip Success with index: {self.passed_index}")
+        self.log(
+            f"Plan Aim Grip Success with index: {self.passed_index} , Distance: {self.data_sorted_grasp_gripper_distance_filter[self.passed_index]}"
+        )
 
     ## CLIENT: TRIGGER AIM ############################################
     def command_trigger_aim(self):
@@ -967,8 +1060,8 @@ class MainNode(Node):
         self.service_trigger_and_wait(self.client_trigger_aim)
 
     ## CLIENT: TRIGGER GRIP ###########################################
-    def command_trigger_grip(self):
-        self.srv_gripper_control_send_distance(distance_mm=50)
+    async def command_trigger_grip(self):
+        await self.srv_gripper_control_send_distance(distance_mm=50)
         # future = self.client_trigger_grip.call_async(Trigger.Request())
         self.log("Going to GRIP")
         self.service_trigger_and_wait(self.client_trigger_grip)
@@ -1011,15 +1104,23 @@ class MainNode(Node):
         gripper_response = await self.call_service(self.client_gripper_control, request)
         if not gripper_response:
             return
-        self.log(f"Sent distance Success")
+        self.log(f"Sent distance Success: {distance_mm} mm")
 
     ## GRIPPER OPEN ###########################################
-    def command_gripper_open(self):
-        self.srv_gripper_control_send_distance(distance_mm=55)
+    async def command_gripper_open(self):
+        await self.srv_gripper_control_send_distance(distance_mm=55)
 
     ## GRIPPER CLOSE ########################################
-    def command_gripper_close(self):
-        self.srv_gripper_control_send_distance(distance_mm=0)
+    async def command_gripper_close(self):
+        self.log(f"Passed Index: {self.passed_index}")
+        if self.passed_index is not None:
+            await self.srv_gripper_control_send_distance(
+                distance_mm=int(
+                    self.data_sorted_grasp_gripper_distance_filter[self.passed_index]
+                ) - 5
+            )
+        else:
+            await self.srv_gripper_control_send_distance(distance_mm=0)
 
     ## FAKE POINT CLOUD ########################################
     def command_fake_point_cloud(self):
@@ -1032,6 +1133,24 @@ class MainNode(Node):
         self.data_object_pose.pose.position.z += 0.8
         self.pub_object_pose.publish(self.data_object_pose)
         self.call_make_stl_collision()
+
+    ## FAKE_JOINT_STATE
+    def fake_joint_state_pub(self):
+
+        if len(self.data_aim_joint_state) == 0:
+            self.log("No Joint State Data")
+            return
+
+        msg = self.data_aim_joint_state[self.fake_joint_state_index]
+
+        msg.header.stamp = self.get_clock().now().to_msg()
+
+        msg.name = ["fake_" + i for i in msg.name]
+
+        self.pub_fake_joint_state.publish(msg)
+        self.fake_joint_state_index = (self.fake_joint_state_index + 1) % len(
+            self.data_aim_joint_state
+        )
 
     ## CLIENT: FUSE POINTCLOUD ########################################
     async def command_fuse_pointcloud(self):
@@ -1097,8 +1216,8 @@ class MainNode(Node):
             ),
             file_name="depth_fused",
         )
-        self.data_array_depth = array_depth_mm
-        self.data_msg_depth = fuse_pointcloud_response.depth_image
+        self.data_array_depth_fused = array_depth_mm
+        self.data_msg_depth_fused = fuse_pointcloud_response.depth_image
 
         self.log("Fuse PointCloud Success")
 
@@ -1116,11 +1235,11 @@ class MainNode(Node):
         if not self.client_camera_ik_joint_state.wait_for_service(timeout_sec=3.0):
             self.elog("Service Camera IK Joint State not available!")
             return
-        
+
         if not self.client_move_joint_pose.wait_for_service(timeout_sec=3.0):
             self.elog("Service Move Joint Pose not available!")
             return
-        
+
         request_get_planning_scene = GetPlanningScene.Request()
         request_get_planning_scene.components.components = (
             PlanningSceneComponents.SCENE_SETTINGS
@@ -1138,9 +1257,7 @@ class MainNode(Node):
 
         # Response Planning Scene
         self.data_planning_scene = planning_scene_response.scene
-        self.log(
-            f"Received Planning Scene of type: {type(self.data_planning_scene)}."
-        )
+        self.log(f"Received Planning Scene of type: {type(self.data_planning_scene)}.")
 
         # Camera IK
         request_camera_joint_state = CameraIKJointState.Request()
@@ -1154,10 +1271,15 @@ class MainNode(Node):
         )
         if not camera_ik_joint_state_response:
             return
-        
-        print(camera_ik_joint_state_response)
 
-        for camera_capture_joint_state in camera_ik_joint_state_response.moving_joint_state:
+        # Response
+        self.log(
+            f"Received Camera IK Response with len: {len(camera_ik_joint_state_response.moving_joint_state)}."
+        )
+
+        for (
+            camera_capture_joint_state
+        ) in camera_ik_joint_state_response.moving_joint_state:
 
             req_move_joint = JointPose.Request()
             req_move_joint.joint_state = camera_capture_joint_state
@@ -1170,16 +1292,28 @@ class MainNode(Node):
             )
             if not move_joint_response:
                 return
-            
+
+            # Response
             self.log(f"Move Joint -> success : {move_joint_response.success}")
+
+            if not move_joint_response.success:
+                self.log(f"Move Joint Failed. Exiting....")
+                return
 
             await asyncio.sleep(1)
 
-            self.command_capture_to_fuse()
+            if self.capture_index is None:
+                self.capture_index = 0
+                self.command_capture_to_fuse(new_folder=True)
+            else:
+                self.capture_index += 1
+                self.command_capture_to_fuse(new_folder=False)
             # break
 
         await asyncio.sleep(2)
         await self.command_fuse_pointcloud()
+
+        self.capture_index = None
 
 
 def main(args=None):

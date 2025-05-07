@@ -23,6 +23,12 @@ class CollisionMakerService(Node):
         self.srv = self.create_service(
             PointCloudSend, "CollisionMaker", self.collision_maker_callback
         )
+
+
+        self.VOXEL_SIZE = 0.01
+        self.MAX_DISTANCE=0.75
+        self.MIN_PCL_PER_CUBE=3
+
         self.get_logger().info("CollisionMaker service is ready.")
 
     def collision_maker_callback(self, request, response):
@@ -86,48 +92,51 @@ class CollisionMakerService(Node):
             if voxel_counts[k] >= min_pcl_per_cube
         }
 
-        # Normalize distances for color mapping
-        distances = np.array(list(filtered_voxels.values()))
-
-        if distances.size == 0:
-            self.get_logger().warn("No voxels passed filtering (empty distance list). Skipping collision creation.")
+        if not filtered_voxels:
+            self.get_logger().warn("No voxels passed filtering. Skipping collision creation.")
             return []
-        
-        min_dist = np.min(distances)
-        max_dist = np.max(distances)
-        norm_dists = (distances - min_dist) / (max_dist - min_dist + 1e-6)
 
-        # Color function: red to blue
-        def dist_to_color(norm_val):
-            return [1 - norm_val, 0, norm_val]
+        # Group by (x, y), sort z, then merge contiguous z's
+        xy_groups = defaultdict(list)
+        for voxel in filtered_voxels:
+            x, y, z = voxel
+            xy_groups[(x, y)].append(z)
 
-        # Create and color cubes
-        cubes = []
-        for voxel, norm_dist in zip(filtered_voxels.keys(), norm_dists):
-            cube_center = min_bound + np.array(voxel) * voxel_size + (voxel_size / 2)
-            cubes.append(cube_center)
+        merged_cubes = []
 
-        print(len(cubes))
+        for (x, y), z_list in xy_groups.items():
+            z_list.sort()
+            start_z = z_list[0]
+            prev_z = z_list[0]
 
-        return cubes
+            for z in z_list[1:] + [None]:  # sentinel to trigger last group
+                if z is None or z != prev_z + 1:
+                    height = (prev_z - start_z + 1) * voxel_size
+                    center_z = (start_z + prev_z + 1) / 2 * voxel_size
+                    center_x = min_bound[0] + (x + 0.5) * voxel_size
+                    center_y = min_bound[1] + (y + 0.5) * voxel_size
+                    center_z += min_bound[2]
+                    merged_cubes.append((center_x, center_y, center_z, height))
+                    start_z = z
+                prev_z = z
+
+        return merged_cubes
 
     def publish_collision_objects_from_pcd(self, pcd):
         # collision_objects_data = self.process_pointcloud_to_boxes(pcd)
 
-        VOXEL_SIZE = 0.05
-
         # Create a PlanningScene message and mark it as a diff
         planning_scene = PlanningScene()
         planning_scene.is_diff = True
-        collision_boxes_center = self.pointcloud_xyz_to_simple_collision(
+        collision_boxes = self.pointcloud_xyz_to_simple_collision(
             pcd,
-            max_distance=0.75,
-            voxel_size=VOXEL_SIZE,
-            min_pcl_per_cube=5,
+            max_distance=self.MAX_DISTANCE,
+            voxel_size=self.VOXEL_SIZE,
+            min_pcl_per_cube=self.MIN_PCL_PER_CUBE,
         )
 
         # Aggregate collision objects
-        for idx, box_center in enumerate(collision_boxes_center):  # data
+        for idx, (x, y, z, height) in enumerate(collision_boxes):
             collision_object = CollisionObject()
             collision_object.header = Header()
             collision_object.header.frame_id = "world"
@@ -135,12 +144,12 @@ class CollisionMakerService(Node):
 
             box = SolidPrimitive()
             box.type = SolidPrimitive.BOX
-            box.dimensions = list([VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE])
+            box.dimensions = [self.VOXEL_SIZE, self.VOXEL_SIZE, height]
 
             pose = Pose()
-            pose.position.x = float(box_center[0])
-            pose.position.y = float(box_center[1])
-            pose.position.z = float(box_center[2])
+            pose.position.x = float(x)
+            pose.position.y = float(y)
+            pose.position.z = float(z)
             pose.orientation.x = 0.0
             pose.orientation.y = 0.0
             pose.orientation.z = 0.0
@@ -152,10 +161,9 @@ class CollisionMakerService(Node):
 
             planning_scene.world.collision_objects.append(collision_object)
 
-        # Publish all collision objects as one message
         self.publisher_.publish(planning_scene)
         self.get_logger().info(
-            f"Published {len(planning_scene.world.collision_objects)} CollisionObjects in one PlanningScene message"
+            f"Published {len(planning_scene.world.collision_objects)} merged CollisionObjects."
         )
 
 

@@ -32,17 +32,18 @@ class AllGraspServer(Node):
 
         MIN_NUM_GROUP_MEMBER = 10
 
-        ADJACENT_THRESHOLD_ANGLE = 3
-        OPPOSITE_THRESHOLD_ANGLE = 15
+        ADJACENT_THRESHOLD_ANGLE = 5
+        OPPOSITE_THRESHOLD_ANGLE = 25
 
         SAMPLE_GRID_SIZE = 10  # In mm
+        GRIPPER_ANGLE_INTERVAL = 30
 
         ##########################################
         # Load a point cloud
 
         cad_file = os.path.join(
             request.dataset_path_prefix,
-            f"{request.target_obj}/{request.target_obj}_centered.ply",
+            f"{request.target_obj}/{request.target_obj}_centered_uniform.ply",
         )
 
         if os.path.exists(cad_file):
@@ -244,7 +245,7 @@ class AllGraspServer(Node):
         print("Simulating Gripper...")
         for point1_idx, point2_idx in line_set_index:
 
-            for y_angle in range(0, 360, 20):
+            for y_angle in range(0, 360, GRIPPER_ANGLE_INTERVAL):
                 # Hand E
                 my_gripper = MyGripperWithContact(
                     hand_width=25,
@@ -256,6 +257,7 @@ class AllGraspServer(Node):
                     back_width=60,
                     back_height=60,
                     contact_thickness=3,
+                    gripper_in_offset=10,
                     skeleton_radius=1,
                 )
 
@@ -300,10 +302,10 @@ class AllGraspServer(Node):
             frame.transform(HT)
             gripper_coordinate_frames.append(frame)
 
-            print(
-                f"Contact Area : {gripper_area_score[index]}/{np.max(gripper_area_score)}, Distance to CoM : {d_to_com}/{max_d_to_com}"
-            )
-            print(HT_in_meter)
+            # print(
+            #     f"Contact Area : {gripper_area_score[index]}/{np.max(gripper_area_score)}, Distance to CoM : {d_to_com}/{max_d_to_com}"
+            # )
+            # print(HT_in_meter)
 
             translation = HT_in_meter[0:3, 3]
 

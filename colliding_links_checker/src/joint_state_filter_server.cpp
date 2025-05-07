@@ -3,6 +3,8 @@
 #include <std_msgs/msg/string.hpp>
 #include <custom_srv_pkg/msg/string_array.hpp>
 #include <custom_srv_pkg/srv/joint_state_collision.hpp>
+#include <custom_srv_pkg/srv/joint_state_collision_bool.hpp>
+
 #include <urdf_parser/urdf_parser.h>
 #include <srdfdom/model.h>
 
@@ -32,6 +34,10 @@ public:
     server_srv_ = this->create_service<custom_srv_pkg::srv::JointStateCollision>(
         "joint_state_collision_check",
         std::bind(&RobotPoseCollisionChecker::serviceCallback, this, std::placeholders::_1, std::placeholders::_2));
+
+    server_bool_srv_ = this->create_service<custom_srv_pkg::srv::JointStateCollisionBool>(
+        "joint_state_collision_check_bool",
+        std::bind(&RobotPoseCollisionChecker::serviceBoolCallback, this, std::placeholders::_1, std::placeholders::_2));
   }
 
 private:
@@ -52,6 +58,42 @@ private:
     acm.setEntry("shoulder_link", "upper_arm_link", true);
     acm.setEntry("wrist_1_link", "wrist_2_link", true);
     acm.setEntry("wrist_2_link", "wrist_3_link", true);
+
+    acm.setEntry("base_link_inertia", "upper_arm_link", true);
+    acm.setEntry("base_link_inertia", "wrist_2_link", true);
+
+    acm.setEntry("forearm_link", "wrist_2_link", true);
+
+    acm.setEntry("mount", "robotiq_hande_left_finger", true);
+    acm.setEntry("mount", "robotiq_hande_right_finger", true);
+    acm.setEntry("mount", "wrist_2_link", true);
+    acm.setEntry("mount", "wrist_3_link", true);
+
+    acm.setEntry("robotiq_hande_coupler", "robotiq_hande_left_finger", true);
+    acm.setEntry("robotiq_hande_coupler", "robotiq_hande_right_finger", true);
+    acm.setEntry("robotiq_hande_coupler", "wrist_1_link", true);
+    acm.setEntry("robotiq_hande_coupler", "wrist_2_link", true);
+    acm.setEntry("robotiq_hande_coupler", "zed2i", true);
+
+    acm.setEntry("robotiq_hande_left_finger", "robotiq_hande_right_finger", true);
+    acm.setEntry("robotiq_hande_left_finger", "wrist_1_link", true);
+    acm.setEntry("robotiq_hande_left_finger", "wrist_2_link", true);
+    acm.setEntry("robotiq_hande_left_finger", "wrist_3_link", true);
+    acm.setEntry("robotiq_hande_left_finger", "zed2i", true);
+
+    acm.setEntry("robotiq_hande_link", "wrist_1_link", true);
+    acm.setEntry("robotiq_hande_link", "wrist_2_link", true);
+    acm.setEntry("robotiq_hande_link", "wrist_3_link", true);
+    acm.setEntry("robotiq_hande_link", "zed2i", true);
+
+    acm.setEntry("robotiq_hande_right_finger", "wrist_1_link", true);
+    acm.setEntry("robotiq_hande_right_finger", "wrist_2_link", true);
+    acm.setEntry("robotiq_hande_right_finger", "wrist_3_link", true);
+    acm.setEntry("robotiq_hande_right_finger", "zed2i", true);
+
+    acm.setEntry("shoulder_link", "table", true);
+    acm.setEntry("wrist_1_link", "wrist_3_link", true);
+    acm.setEntry("wrist_3_link", "zed2i", true);
   }
   void robotDescriptionCallback(const std_msgs::msg::String::SharedPtr msg)
   {
@@ -87,6 +129,85 @@ private:
 
   //   received_new_planning_scene_ = true;
   // };
+
+  void serviceBoolCallback(
+      const std::shared_ptr<custom_srv_pkg::srv::JointStateCollisionBool::Request> request,
+      std::shared_ptr<custom_srv_pkg::srv::JointStateCollisionBool::Response> response)
+  {
+
+    planning_scene_->usePlanningSceneMsg(request->planning_scene);
+    setAllowAdjacentCollisions(planning_scene_);
+
+    int total_pass = 0;
+
+    for (size_t i = 0; i < request->joint_state.size(); ++i)
+    {
+      // Set robot state
+      const auto &joint_state = request->joint_state[i];
+      robot_state->setVariablePositions(joint_state.name, joint_state.position);
+      robot_state->update();
+
+      planning_scene_->setCurrentState(*robot_state);
+
+      collision_detection::CollisionRequest collision_request;
+      collision_detection::CollisionResult collision_result;
+
+      collision_request.contacts = true;
+      collision_request.max_contacts = 1000;
+      collision_request.max_contacts_per_pair = 5;
+
+      planning_scene_->checkCollision(collision_request, collision_result);
+
+      bool collision_ok = true;
+
+      for (const auto &contact_pair : collision_result.contacts)
+      {
+        const std::string &link1 = contact_pair.first.first;
+        const std::string &link2 = contact_pair.first.second;
+
+        bool is_link1_robot = robot_model_->hasLinkModel(link1);
+        bool is_link2_robot = robot_model_->hasLinkModel(link2);
+
+        if (is_link1_robot && is_link2_robot)
+        {
+          collision_detection::AllowedCollision::Type allowed_collision_type;
+          bool entry_exists = planning_scene_->getAllowedCollisionMatrix().getEntry(link1, link2, allowed_collision_type);
+
+          if (!entry_exists || allowed_collision_type != collision_detection::AllowedCollision::ALWAYS)
+          {
+            RCLCPP_INFO(this->get_logger(), "%s <----> %s.", link1.c_str(), link2.c_str());
+
+            collision_ok = false;
+            break;
+          }
+        }
+
+        else if (is_link1_robot && !is_link2_robot && link1 != "table")
+        {
+          if (!(link2 == "object" && (link1 == "robotiq_hande_link" || link1 == "robotiq_hande_left_finger" || link1 == "robotiq_hande_right_finger")))
+          {
+            collision_ok = false;
+            break;
+          }
+        }
+        else if (is_link2_robot && !is_link1_robot && link2 != "table")
+        {
+          if (!(link1 == "object" && (link2 == "robotiq_hande_link" || link2 == "robotiq_hande_left_finger" || link2 == "robotiq_hande_right_finger")))
+          {
+            collision_ok = false;
+            break;
+          }
+        }
+      }
+      response->pass_list.push_back(collision_ok);
+
+      if (collision_ok)
+      {
+        total_pass++;
+      }
+    }
+    RCLCPP_INFO(this->get_logger(), "Checked %zu joint_states, %i are collision-free.", request->joint_state.size(), total_pass);
+  }
 
   void serviceCallback(
       const std::shared_ptr<custom_srv_pkg::srv::JointStateCollision::Request> request,
@@ -155,6 +276,7 @@ private:
   rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr client_get_planning_scene;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_sub_;
   rclcpp::Service<custom_srv_pkg::srv::JointStateCollision>::SharedPtr server_srv_;
+  rclcpp::Service<custom_srv_pkg::srv::JointStateCollisionBool>::SharedPtr server_bool_srv_;
 
   planning_scene::PlanningScenePtr planning_scene_;
 

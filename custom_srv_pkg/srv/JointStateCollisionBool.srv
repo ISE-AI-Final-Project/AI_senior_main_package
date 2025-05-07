@@ -1,0 +1,4 @@
+sensor_msgs/JointState[] joint_state
+moveit_msgs/PlanningScene planning_scene
+---
+bool[] pass_list

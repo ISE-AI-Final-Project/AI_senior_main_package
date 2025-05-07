@@ -114,6 +114,9 @@ void handle_aim_grip_request(
     const std::shared_ptr<AimGripPlan::Request> request,
     std::shared_ptr<AimGripPlan::Response> response)
 {
+
+    RCLCPP_INFO(LOGGER, "Received AimGripPlan Request");
+
     const auto &aim_poses = request->sorted_aim_poses.poses;
     const auto &aim_joint_states = request->aim_joint_states;
     const auto &grip_poses = request->sorted_grip_poses.poses;
@@ -131,10 +134,13 @@ void handle_aim_grip_request(
 
         const auto &joint_state = aim_joint_states[i];
         std::map<std::string, double> joint_values;
-
-        for (size_t j = 0; j < joint_state.name.size(); ++j)
+        for (size_t i = 0; i < joint_state.name.size(); ++i)
         {
-            joint_values[joint_state.name[j]] = joint_state.position[j];
+            if (allowed_joints.count(joint_state.name[i]))
+            {
+                joint_values[joint_state.name[i]] = joint_state.position[i];
+                // RCLCPP_INFO(LOGGER, "Added joint %s: %.4f", js.name[i].c_str(), js.position[i]);
+            }
         }
 
         move_group->setJointValueTarget(joint_values);
