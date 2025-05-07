@@ -114,9 +114,6 @@ void handle_aim_grip_request(
     const std::shared_ptr<AimGripPlan::Request> request,
     std::shared_ptr<AimGripPlan::Response> response)
 {
-
-    RCLCPP_INFO(LOGGER, "Received AimGripPlan Request");
-
     const auto &aim_poses = request->sorted_aim_poses.poses;
     const auto &aim_joint_states = request->aim_joint_states;
     const auto &grip_poses = request->sorted_grip_poses.poses;
@@ -134,13 +131,10 @@ void handle_aim_grip_request(
 
         const auto &joint_state = aim_joint_states[i];
         std::map<std::string, double> joint_values;
-        for (size_t i = 0; i < joint_state.name.size(); ++i)
+
+        for (size_t j = 0; j < joint_state.name.size(); ++j)
         {
-            if (allowed_joints.count(joint_state.name[i]))
-            {
-                joint_values[joint_state.name[i]] = joint_state.position[i];
-                // RCLCPP_INFO(LOGGER, "Added joint %s: %.4f", js.name[i].c_str(), js.position[i]);
-            }
+            joint_values[joint_state.name[j]] = joint_state.position[j];
         }
 
         move_group->setJointValueTarget(joint_values);
@@ -249,11 +243,61 @@ void handle_grip_trigger_request(
     visual_tools->trigger();
 }
 
-void handle_home_plan_request(
+
+void handle_home_trigger_request(
     const std::shared_ptr<Trigger::Request> req,
     std::shared_ptr<Trigger::Response> res)
 {
     (void)req;
+
+    RCLCPP_INFO(LOGGER, "Lifting from successful grip pose by 3cm via Cartesian path...");
+
+    geometry_msgs::msg::Pose start_pose = successful_grip_pose;
+    geometry_msgs::msg::Pose lifted_pose = start_pose;
+    lifted_pose.position.z += 0.03;
+
+    std::vector<geometry_msgs::msg::Pose> waypoints = {start_pose, lifted_pose};
+    moveit_msgs::msg::RobotTrajectory trajectory_msg;
+    const double eef_step = 0.01;
+    const double jump_threshold = 0.0;
+    double fraction = 0.0;
+
+    rclcpp::Time lift_start_time = node->now();
+    rclcpp::Duration lift_timeout = rclcpp::Duration::from_seconds(5.0);
+
+    while (fraction < 1.0)
+    {
+        fraction = move_group->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory_msg);
+
+        if (fraction >= 1.0)
+        {   
+            RCLCPP_INFO(LOGGER, "Cartesian Path planned successfully.");
+            break;
+        }
+
+        if ((node->now() - lift_start_time) > lift_timeout)
+        {
+            RCLCPP_WARN(LOGGER, "Cartesian path planning timed out after 5 seconds.");
+            break;
+        }
+
+        RCLCPP_WARN(LOGGER, "Lift Cartesian path incomplete (%.2f%%), retrying...", fraction * 100.0);
+        rclcpp::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    if (fraction >= 1.0)
+    {
+        moveit::planning_interface::MoveGroupInterface::Plan lift_plan;
+        lift_plan.trajectory_ = trajectory_msg;
+
+        RCLCPP_INFO(LOGGER, "Executing lift trajectory (%.2f%% complete)...", fraction * 100.0);
+        move_group->execute(lift_plan);
+    }
+    else
+    {
+        RCLCPP_WARN(LOGGER, "No valid lift path generated, skipping lift execution.");
+    }
+
     RCLCPP_INFO(LOGGER, "Attempting to plan to home position (with 10s timeout)...");
 
     move_group->setJointValueTarget(home_joint_values);
@@ -267,34 +311,16 @@ void handle_home_plan_request(
         if (move_group->plan(home_plan_global) == moveit::core::MoveItErrorCode::SUCCESS)
         {
             success = true;
+            RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");
             break;
         }
         rclcpp::sleep_for(std::chrono::milliseconds(200));
     }
 
-    if (success)
-    {
-        RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");
-        home_plan = true;
-        res->success = true;
-        res->message = "Home plan succeeded.";
-    }
-    else
-    {
-        RCLCPP_ERROR(LOGGER, "Failed to plan to home within 10 seconds.");
-        home_plan = false;
-        res->success = false;
-        res->message = "Home planning failed.";
-    }
-}
+    if (success) {RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");}
+    else {RCLCPP_ERROR(LOGGER, "Failed to plan to home within 10 seconds.");}
 
-void handle_home_trigger_request(
-    const std::shared_ptr<Trigger::Request> req,
-    std::shared_ptr<Trigger::Response> res)
-{
-    (void)req;
-
-    if (!home_plan)
+    if (!success)
     {
         res->success = false;
         res->message = "Home plan not available. Call home_plan_service first.";
@@ -420,9 +446,6 @@ int main(int argc, char **argv)
 
     auto grip_trigger_service = node->create_service<Trigger>(
         "grip_trigger_service", handle_grip_trigger_request);
-
-    auto home_plan_service = node->create_service<Trigger>(
-        "home_plan_service", handle_home_plan_request);
 
     auto home_trigger_service = node->create_service<Trigger>(
         "home_trigger_service", handle_home_trigger_request);
