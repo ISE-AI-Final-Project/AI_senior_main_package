@@ -1,3 +1,4 @@
 int32 gripper_distance
+bool pub_joint
 ---
 bool acknowledge

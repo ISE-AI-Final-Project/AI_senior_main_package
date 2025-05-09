@@ -29,6 +29,7 @@ from custom_srv_pkg.srv import (
     GraspPoseSend,
     Gripper,
     IKJointState,
+    IKPassCount,
     IMGSend,
     JointPose,
     JointStateCollision,
@@ -314,6 +315,10 @@ class MainNode(Node):
         self.client_fuse_pointcloud = self.create_client(PCLFuse, "pcl_fuse")
         self.client_camera_ik_joint_state = self.create_client(
             CameraIKJointState, "camera_joint_state_from_ik"
+        )
+
+        self.client_ik_pass_count = self.create_client(
+            IKPassCount, "ik_pass_count"
         )
 
         # Socket Client
@@ -692,6 +697,9 @@ class MainNode(Node):
                 self.data_pem_result
             )
 
+            # + 2 cm
+            # result_trans +=(result_trans /  np.linalg.norm(result_trans)) * 0.015
+            
             # Object PoseStamped WRT Zed
             self.data_object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
                 rotation=result_rot,
@@ -1092,13 +1100,14 @@ class MainNode(Node):
         self.service_trigger_and_wait(self.client_detach)
 
     ## CLIENT: GRIPPER CONTROL ########################################
-    async def srv_gripper_control_send_distance(self, distance_mm):
+    async def srv_gripper_control_send_distance(self, distance_mm, pub_joint=False):
         if not self.client_gripper_control.wait_for_service(timeout_sec=3.0):
             self.elog("Service Gripper Control not available!")
             return
 
         request = Gripper.Request()
         request.gripper_distance = int(distance_mm)
+        request.pub_joint = pub_joint
 
         # Call
         gripper_response = await self.call_service(self.client_gripper_control, request)
@@ -1108,7 +1117,7 @@ class MainNode(Node):
 
     ## GRIPPER OPEN ###########################################
     async def command_gripper_open(self):
-        await self.srv_gripper_control_send_distance(distance_mm=55)
+        await self.srv_gripper_control_send_distance(distance_mm=55, pub_joint=True)
 
     ## GRIPPER CLOSE ########################################
     async def command_gripper_close(self):
@@ -1117,15 +1126,25 @@ class MainNode(Node):
             await self.srv_gripper_control_send_distance(
                 distance_mm=int(
                     self.data_sorted_grasp_gripper_distance_filter[self.passed_index]
-                ) - 5
+                )
+                - 2
             )
         else:
             await self.srv_gripper_control_send_distance(distance_mm=0)
 
     ## FAKE POINT CLOUD ########################################
-    def command_fake_point_cloud(self):
-        self.data_pointcloud = fake_utils.get_random_pointcloud()
-        self.pub_captured_pointcloud.publish(self.data_pointcloud)
+    async def command_fake_point_cloud(self):
+
+        request = IKPassCount.Request()
+        request.pose_array = self.data_sorted_grasp_aim_pose
+
+        # Call
+        await self.call_service(
+            self.client_ik_pass_count, request
+        )
+
+        # self.data_pointcloud = fake_utils.get_random_pointcloud()
+        # self.pub_captured_pointcloud.publish(self.data_pointcloud)
 
     ## FAKE OBJECT POSE ########################################
     def command_fake_object_pose(self):

@@ -38,6 +38,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/TargetObjectSend.srv"
   "srv/JointPose.srv"
   "srv/CameraIKJointState.srv"
+  "srv/IKPassCount.srv"
+
 
 
   DEPENDENCIES std_msgs

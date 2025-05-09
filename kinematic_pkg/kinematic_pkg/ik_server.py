@@ -9,7 +9,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
-from custom_srv_pkg.srv import CameraIKJointState, IKJointState
+from custom_srv_pkg.srv import CameraIKJointState, IKJointState, IKPassCount
 from main_pkg.utils import utils
 
 
@@ -28,6 +28,12 @@ class UR3eIKNode(Node):
             CameraIKJointState,
             "camera_joint_state_from_ik",
             self.simple_camera_ik_joint_state_callback,
+        )
+
+        self.service_ik_pass_count = self.create_service(
+            IKPassCount,
+            "ik_pass_count",
+            self.ik_pass_count_callback,
         )
 
         # self.joint_pose_pub = self.create_publisher(PoseArray, "joint_pose_from_ik", 10)
@@ -108,11 +114,7 @@ class UR3eIKNode(Node):
             starting_joint_state[:6], target_joint_state[:6], joint_limit_list
         ):
             # three candidates: nominal, +2π wrap, and –2π wrap
-            cands = [
-                target,
-                target + 2*np.pi,
-                target - 2*np.pi
-            ]
+            cands = [target, target + 2 * np.pi, target - 2 * np.pi]
 
             # apply limit: mark out‐of‐bounds candidates as “bad”
             for i, c in enumerate(cands):
@@ -274,12 +276,10 @@ class UR3eIKNode(Node):
     def ik_joint_state_callback(
         self, request: IKJointState.Request, response: IKJointState.Response
     ):
-        
         response.sorted_aim_poses = PoseArray()
         response.sorted_aim_poses.header.frame_id = "world"
         response.sorted_grip_poses = PoseArray()
         response.sorted_grip_poses.header.frame_id = "world"
-
 
         for aim_pose_world, grip_pose_world, gripper_distance in zip(
             request.sorted_aim_poses.poses,
@@ -307,6 +307,9 @@ class UR3eIKNode(Node):
                     )
 
                     if grip_joint_state_by_ik:
+                        # Pass
+
+                        # Normal ##############################
                         # Output Joint with offset
                         msg_aim = JointState()
                         msg_aim.name = self.joint_names
@@ -331,6 +334,57 @@ class UR3eIKNode(Node):
                         msg_grip.name = self.joint_names
                         msg_grip.position = grip_joint_state_by_ik
                         response.possible_grip_joint_state.append(msg_grip)
+
+                        # Flip Last Joint ##############################
+                        aim_joint_state_by_ik_flip = aim_joint_state_by_ik.copy()
+                        grip_joint_state_by_ik_flip = grip_joint_state_by_ik.copy()
+
+                        if aim_joint_state_by_ik_flip[5] > 0:
+                            aim_joint_state_by_ik_flip[5] -= np.pi
+                            grip_joint_state_by_ik_flip[5] -= np.pi
+                        else:
+                            aim_joint_state_by_ik_flip[5] += np.pi
+                            grip_joint_state_by_ik_flip[5] += np.pi
+
+                        # Output Joint with offset
+                        msg_aim_flip = JointState()
+                        msg_aim_flip.name = self.joint_names
+
+                        # Get nearest joint rotation based on current joint state
+                        nearest_aim_joint_state_by_ik = self.make_nearest_joint_state_rotation(
+                            starting_joint_state=request.current_joint_state.position,
+                            target_joint_state=aim_joint_state_by_ik_flip,
+                        )
+                        msg_aim_flip.position = nearest_aim_joint_state_by_ik
+
+                        response.possible_aim_joint_state.append(msg_aim_flip)
+                        response.gripper_distance.append(gripper_distance)
+
+                        # Flip Pose
+                        flip_pose = Pose()
+                        flip_pose.position.x = flip_pose.position.y = (
+                            flip_pose.position.z
+                        ) = 0.0
+                        flip_pose.orientation.x = 0.0
+                        flip_pose.orientation.y = 0.0
+                        flip_pose.orientation.z = 1.0
+                        flip_pose.orientation.w = 0.0
+
+                        aim_pose_world_flip = utils.chain_poses(
+                            flip_pose, aim_pose_world
+                        )
+                        grip_pose_world_flip = utils.chain_poses(
+                            flip_pose, grip_pose_world
+                        )
+
+                        response.sorted_aim_poses.poses.append(aim_pose_world_flip)
+                        response.sorted_grip_poses.poses.append(grip_pose_world_flip)
+
+                        # Grip Joint State
+                        msg_grip_flip = JointState()
+                        msg_grip_flip.name = self.joint_names
+                        msg_grip_flip.position = grip_joint_state_by_ik_flip
+                        response.possible_grip_joint_state.append(msg_grip_flip)
 
             # print("==============")
 
@@ -509,6 +563,42 @@ class UR3eIKNode(Node):
         self.get_logger().info(
             f"Returning capture pose with {len(response.moving_joint_state)} poses."
         )
+        return response
+
+    def ik_pass_count_callback(
+        self, request: IKPassCount.Request, response: IKPassCount.Response
+    ):
+
+        response_list = []
+
+        for pose in request.pose_array.poses:
+
+            pose_wrt_base = utils.transform_pose(
+                self.tf_buffer,
+                pose,
+                current_frame=request.pose_array.header.frame_id,
+                new_frame="base",
+            )
+
+            total_pass = 0
+            combinations = list(itertools.product([1, -1], repeat=3))
+            for combination in combinations:
+                # print(f"Combination: {combination}")
+                joint_state_by_ik = self.ik(
+                    pose_wrt_base=pose_wrt_base, combination=combination
+                )
+
+                if joint_state_by_ik:
+                    total_pass += 1
+
+            response_list.append(total_pass)
+
+        response.pass_count = response_list
+
+        self.get_logger().info(
+            f"IK Pass Count: {len(request.pose_array.poses)} Poses Received. Result: {str(response_list)}."
+        )
+
         return response
 
 

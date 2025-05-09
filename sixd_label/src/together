@@ -1,30 +1,27 @@
 #!/usr/bin/env python3
 
-import os
-import rclpy
-import time
-import trimesh
-import numpy as np
-from std_srvs.srv import Trigger
-import tf2_ros
-import tf2_geometry_msgs
-import cv2
-from scipy.spatial.transform import Rotation as R
 import json
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
-from rclpy.node import Node
+import os
+import time
 
+import cv2
+import numpy as np
+import open3d as o3d
+import rclpy
+import tf2_geometry_msgs
+import tf2_ros
+import trimesh
 from geometry_msgs.msg import Point, Pose
-from moveit_msgs.msg import CollisionObject
-from moveit_msgs.msg import PlanningScene
-from shape_msgs.msg import Mesh, MeshTriangle
-from std_msgs.msg import Header
-
+from moveit_msgs.msg import CollisionObject, PlanningScene
+from pycocotools import mask as mask_utils
+from rclpy.node import Node
+from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
-import open3d as o3d
-from pycocotools import mask as mask_utils
+from shape_msgs.msg import Mesh, MeshTriangle
+from std_msgs.msg import Header, String
+from std_srvs.srv import Trigger
+
 
 def project_model_to_mask(cam_K, ply_path, rgb_image, pose):
     fx, fy = cam_K[0], cam_K[4]
@@ -76,7 +73,7 @@ class ScenePublisher(Node):
         # self.object_name = ['purple']
         self.mesh_paths = []
         for name in self.object_name:
-            self.mesh_paths.append('/home/bham/Downloads/senior_dataset/'+ name +'/'+ name +'_centered.stl')
+            self.mesh_paths.append('/home/icetenny/senior-2/senior_dataset/'+ name +'/'+ name +'_centered.stl')
         self.meshes = []
         self.collision_objects = {}
 
@@ -90,12 +87,12 @@ class ScenePublisher(Node):
         self.get_logger().info("Publishers, Subscribers, Servers, and Clients are intiialized.")
         
         self.num_scene = str(input('Input Scene Number please (1-99) : '))
-        self.scene = '/home/bham/Desktop/senior_sixd_dataset/' + self.num_scene + '/'
+        self.scene = '/home/icetenny/senior-2/senior_sixd_dataset/' + self.num_scene + '/'
         self.get_logger().info("Loading Meshes and Scenes.")
 
         rgb_path = self.scene + 'rgb.png'
         depth_path = self.scene + 'depth.png'
-        camera_intrinsic_path = '/home/bham/Downloads/zed_new.json'
+        camera_intrinsic_path = '/home/icetenny/senior-2/zed_new.json'
 
         self.rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
         self.depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
@@ -277,7 +274,7 @@ class ScenePublisher(Node):
                 "translation": translation.tolist()
             }
 
-            mesh_path = f'/home/bham/Downloads/senior_dataset/{obj_name}/{obj_name}_centered.stl'
+            mesh_path = f'/home/icetenny/senior-2/senior_dataset/{obj_name}/{obj_name}_centered.stl'
 
             pose_array = [
                 pose.position.x / 10,

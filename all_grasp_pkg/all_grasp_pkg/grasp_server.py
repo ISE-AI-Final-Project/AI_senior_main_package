@@ -43,7 +43,7 @@ class AllGraspServer(Node):
 
         cad_file = os.path.join(
             request.dataset_path_prefix,
-            f"{request.target_obj}/{request.target_obj}_centered_uniform.ply",
+            f"{request.target_obj}/{request.target_obj}_centered_uniform_reduced.ply",
         )
 
         if os.path.exists(cad_file):
@@ -256,7 +256,7 @@ class AllGraspServer(Node):
                     back_thickness=40,
                     back_width=60,
                     back_height=60,
-                    contact_thickness=3,
+                    contact_thickness=5,
                     gripper_in_offset=10,
                     skeleton_radius=1,
                 )

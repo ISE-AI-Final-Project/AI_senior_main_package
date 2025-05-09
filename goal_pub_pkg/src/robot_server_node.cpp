@@ -118,6 +118,8 @@ void handle_aim_grip_request(
     const auto &aim_joint_states = request->aim_joint_states;
     const auto &grip_poses = request->sorted_grip_poses.poses;
 
+    RCLCPP_INFO(LOGGER, "Received AimGripPlan Request");
+    
     if (aim_poses.size() != aim_joint_states.size())
     {
         RCLCPP_WARN(LOGGER, "Mismatch between aim poses and joint states size.");
@@ -134,7 +136,11 @@ void handle_aim_grip_request(
 
         for (size_t j = 0; j < joint_state.name.size(); ++j)
         {
-            joint_values[joint_state.name[j]] = joint_state.position[j];
+            if (allowed_joints.count(joint_state.name[j]))
+                {
+                    joint_values[joint_state.name[j]] = joint_state.position[j];
+                    // RCLCPP_INFO(LOGGER, "Added joint %s: %.4f", js.name[i].c_str(), js.position[i]);
+                }
         }
 
         move_group->setJointValueTarget(joint_values);
@@ -200,7 +206,7 @@ void handle_grip_trigger_request(
     }
 
     std::vector<geometry_msgs::msg::Pose> waypoints;
-    waypoints.push_back(successful_aim_pose);
+    // waypoints.push_back(successful_aim_pose);
     waypoints.push_back(successful_grip_pose);
 
     moveit_msgs::msg::RobotTrajectory trajectory_msg;
@@ -256,7 +262,7 @@ void handle_home_trigger_request(
     geometry_msgs::msg::Pose lifted_pose = start_pose;
     lifted_pose.position.z += 0.03;
 
-    std::vector<geometry_msgs::msg::Pose> waypoints = {start_pose, lifted_pose};
+    std::vector<geometry_msgs::msg::Pose> waypoints = {lifted_pose};
     moveit_msgs::msg::RobotTrajectory trajectory_msg;
     const double eef_step = 0.01;
     const double jump_threshold = 0.0;
