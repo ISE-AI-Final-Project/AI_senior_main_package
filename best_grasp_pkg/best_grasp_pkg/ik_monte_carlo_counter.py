@@ -1,102 +1,120 @@
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Pose, PoseArray
-from custom_srv_pkg.srv import IKPassCount
+#!/usr/bin/env python3
+import asyncio
+import os
+from datetime import datetime
+from threading import Thread
+
+import matplotlib.pyplot as plt
 import numpy as np
-from scipy.spatial.transform import Rotation as R
+import rclpy
+from geometry_msgs.msg import Pose, PoseArray
+from mpl_toolkits.mplot3d import Axes3D
+from rclpy.node import Node
 
-def perturb_pose(
-    pose: Pose,
-    pos_sigma: float = 0.005,    # position noise STD [m]
-    rot_sigma_deg: float = 5.0    # orientation noise STD [deg]
+from custom_srv_pkg.srv import IKPassCount
+
+
+def random_pose(
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    z_range: tuple[float, float]
 ) -> Pose:
-    """
-    Return a new Pose equal to `pose` plus Gaussian noise
-    on position (in meters) and orientation (in degrees).
-    """
+    """Generate a random Pose (position in bounds, random orientation)."""
     p = Pose()
-    # position
-    p.position.x = pose.position.x + np.random.normal(scale=pos_sigma)
-    p.position.y = pose.position.y + np.random.normal(scale=pos_sigma)
-    p.position.z = pose.position.z + np.random.normal(scale=pos_sigma)
-
-    # orientation
-    base_q = [pose.orientation.x,
-              pose.orientation.y,
-              pose.orientation.z,
-              pose.orientation.w]
-    base_rot = R.from_quat(base_q)
-    delta_rot = R.from_euler(
-        'xyz',
-        np.random.normal(scale=rot_sigma_deg, size=3),
-        degrees=True
-    )
-    q_new = (delta_rot * base_rot).as_quat()
-    p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = q_new
+    p.position.x = np.random.uniform(*x_range)
+    p.position.y = np.random.uniform(*y_range)
+    p.position.z = np.random.uniform(*z_range)
+    q = np.random.normal(size=4)
+    q /= np.linalg.norm(q)
+    p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = q
     return p
 
-
-class MonteCarloIKCounter(Node):
+class MonteCarloRandomIK(Node):
     def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        thread = Thread(target=self.loop.run_forever)
+        thread.daemon = True
+        thread.start()
         super().__init__('ik_monte_carlo_counter')
 
-        # 1) Service client for ik_pass_count
+        # 1) service client
         self.cli = self.create_client(IKPassCount, 'ik_pass_count')
         while not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for "ik_pass_count" service...')
+            self.get_logger().info('Waiting for ik_pass_count…')
 
-        # 2) Base PoseArray (replace this with your actual data source)
-        #    For example, if you have it as a member variable called
-        #    self.data_sorted_grasp_aim_pose, you can assign it here:
-        #
-        #    self.base_poses = self.data_sorted_grasp_aim_pose
-        #
-        #    In this template we'll park an empty PoseArray:
-        self.base_poses = PoseArray()
-        self.base_poses.header.frame_id = 'world'
-        # TODO: fill self.base_poses.poses with your sorted aim poses
-
-        # 3) Monte Carlo parameters
+        # 2) MC parameters
         self.num_samples = 100
+        self.poses_per_sample = 1
+        self.x_bounds = (-0.5, 0.5)
+        self.y_bounds = (-0.5, 0.5)
+        self.z_bounds = ( 0.0, 1.0)
 
-        # 4) Run once after a short delay
-        self.create_timer(1.0, self._on_timer)
+        # 3) run after a short delay
+        # self.create_timer(1.0, self._run_once)
 
-    def _on_timer(self):
-        success_count = 0
-        total = self.num_samples
+        asyncio.run_coroutine_threadsafe(self._run_once(), self.loop)
 
-        for i in range(total):
-            # Build perturbed PoseArray
-            req = IKPassCount.Request()
+
+    async def _run_once(self):
+        pass_cnt = 0
+        x_pass, y_pass, z_pass = [], [], []
+        x_fail, y_fail, z_fail = [], [], []
+        for _ in range(self.num_samples):
             pa = PoseArray()
-            pa.header.frame_id = self.base_poses.header.frame_id
-            pa.poses = [perturb_pose(p) for p in self.base_poses.poses]
+            pa.header.frame_id = 'world'
+            pa.poses = [
+                random_pose(self.x_bounds, self.y_bounds, self.z_bounds)
+                for __ in range(self.poses_per_sample)
+            ]
+            p = pa.poses[0]
+            self.get_logger().info(f"random pose = {pa.poses[0]}")
+
+            req = IKPassCount.Request()
             req.pose_array = pa
 
-            # Call service and wait
             future = self.cli.call_async(req)
-            rclpy.spin_until_future_complete(self, future)
+            await future
 
-            if future.result() is not None:
-                # Assume response.pass_count equals number of poses that solved
-                if future.result().pass_count == len(pa.poses):
-                    success_count += 1
+            #stuck here
+            # rclpy.spin_until_future_complete(self, future)
+            res = future.result()
+
+            if res and res.pass_count and res.pass_count[0] > 0:
+                pass_cnt += 1
+                x_pass.append(p.position.x)
+                y_pass.append(p.position.y)
+                z_pass.append(p.position.z)
             else:
-                self.get_logger().error('Service call to ik_pass_count failed')
+                x_fail.append(p.position.x)
+                y_fail.append(p.position.y)
+                z_fail.append(p.position.z)
+            
+            # res.pass_count not working
+            self.get_logger().info(f"result = {res.pass_count}")
+            pose_status = "fail"
+            if res.pass_count[0] != 0:
+                pose_status = "pass"
+                pass_cnt += 1
+            self.get_logger().info(f"pose status = {pose_status}")
 
-        ratio = success_count / float(total)
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(x_pass, y_pass, z_pass, label='pass')  # default color #1
+        ax.scatter(x_fail, y_fail, z_fail, label='fail')  # default color #2
+        ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+        ax.legend()
+        plt.show()
+        ratio = pass_cnt / float(self.num_samples)
         self.get_logger().info(
-            f'[Monte Carlo] {success_count}/{total} full passes → ratio={ratio:.2f}'
+            f'Random IK MC: {pass_cnt}/{self.num_samples} full passes → {ratio:.2f}'
         )
-
-        # If you only want to run once, shut down:
         rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MonteCarloIKCounter()
+    node = MonteCarloRandomIK()
     rclpy.spin(node)
+    # rclpy.shutdown() is already called in the timer
 
 if __name__ == '__main__':
     main()

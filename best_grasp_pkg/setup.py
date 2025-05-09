@@ -36,6 +36,7 @@ setup(
             # "sub_tf = best_grasp_pkg.sub_tf:main",
             'pose_transform = best_grasp_pkg.pose_transform:main',
             'best_grasp_server = best_grasp_pkg.best_grasp_server:main',
+            'ik_monte_carlo_counter = best_grasp_pkg.ik_monte_carlo_counter:main'
         ],
     },
 )
