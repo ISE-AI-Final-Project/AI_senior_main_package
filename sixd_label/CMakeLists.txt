@@ -20,6 +20,7 @@ install(
   src/stl_pub
   src/pcl_pub  # <--- your new script
   src/together
+  src/together_forever
   DESTINATION lib/${PROJECT_NAME}
 )
 

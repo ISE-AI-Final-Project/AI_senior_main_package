@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import time
+
+import cv2
+import numpy as np
+import open3d as o3d
+import rclpy
+import tf2_geometry_msgs
+import tf2_ros
+import trimesh
+from geometry_msgs.msg import Point, Pose
+from moveit_msgs.msg import CollisionObject, PlanningScene
+from pycocotools import mask as mask_utils
+from rclpy.node import Node
+from scipy.spatial.transform import Rotation as R
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+from shape_msgs.msg import Mesh, MeshTriangle
+from std_msgs.msg import Header, String
+from std_srvs.srv import Trigger
+
+
+def project_model_to_mask(cam_K, ply_path, rgb_image, pose):
+    fx, fy = cam_K[0], cam_K[4]
+    cx, cy = cam_K[2], cam_K[5]
+
+    mesh = o3d.io.read_triangle_mesh(ply_path)
+    mesh.compute_vertex_normals()
+    vertices = np.asarray(mesh.vertices) / 1000.0  # mm to meters
+    triangles = np.asarray(mesh.triangles)
+
+    x, y, z, qx, qy, qz, qw = pose
+    rotation = R.from_quat([qx, qy, qz, qw]).as_matrix()
+    translation = np.array([x, y, z])
+
+    transformed_pts = (rotation @ vertices.T).T + translation.reshape(1, 3)
+
+    h, w = rgb_image.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+
+    for tri in triangles:
+        pts = transformed_pts[tri]  # 3x3 matrix
+        x_ = pts[:, 0]
+        y_ = pts[:, 1]
+        z_ = pts[:, 2]
+
+        # Skip if any vertex is behind the camera
+        if np.any(z_ <= 0):
+            continue
+
+        u = (fx * x_ / z_ + cx).astype(np.int32)
+        v = (fy * y_ / z_ + cy).astype(np.int32)
+
+        # Skip triangles out of bounds
+        if np.any(u < 0) or np.any(u >= w) or np.any(v < 0) or np.any(v >= h):
+            continue
+
+        contour = np.stack([u, v], axis=1).reshape((-1, 1, 2))
+        cv2.fillPoly(mask, [contour], color=255)
+
+    return mask
+
+def new_project_model_to_mask(cam_K, vertices, triangles, pose, image_h, image_w):
+    fx, fy = cam_K[0], cam_K[4]
+    cx, cy = cam_K[2], cam_K[5]
+
+    x, y, z, qx, qy, qz, qw = pose
+    rotation = R.from_quat([qx, qy, qz, qw]).as_matrix()
+    translation = np.array([x, y, z])
+
+    transformed_pts = (rotation @ vertices.T).T + translation.reshape(1, 3)
+
+    mask = np.zeros((image_h, image_w), dtype=np.uint8)
+
+    # 1) gather all triangle‐vertex coordinates at once:
+    P = transformed_pts[triangles]  # shape (M,3,3)
+    X, Y, Z = P[:, :, 0], P[:, :, 1], P[:, :, 2]  # each (M,3)
+
+    # 2) valid‐Z mask (all three points in front of camera):
+    ok_z = np.all(Z > 0, axis=1)
+
+    # 3) project in one go:
+    U = (fx * X / Z + cx).astype(np.int32)  # shape (M,3)
+    V = (fy * Y / Z + cy).astype(np.int32)
+
+    # 4) valid‐bounds mask:
+    ok_bounds = np.all((U >= 0) & (U < image_w) & (V >= 0) & (V < image_h), axis=1)
+
+    # 5) select only truly visible triangles:
+    valid = np.nonzero(ok_z & ok_bounds)[0]
+    if valid.size:
+        # extract just the good ones
+        u2 = U[valid]  # (N,3)
+        v2 = V[valid]  # (N,3)
+
+        # stack into the shape OpenCV wants: (N,3,1,2)
+        pts = np.stack([u2, v2], axis=-1)  # → (N,3,2)
+        pts = pts[:, :, np.newaxis, :]  # → (N,3,1,2)
+        pts = pts.astype(np.int32, copy=False)
+
+        # 6) one single C‐call to rasterize all triangles
+        cv2.fillPoly(mask, pts, color=255)
+
+    return mask
+
+
+def get_iou(m1, m2):
+    return np.sum(np.bitwise_and(m1, m2)) / np.sum(np.bitwise_or(m1, m2))
+
+class ScenePublisher(Node):
+    def __init__(self):
+        super().__init__('scene_publisher')
+
+        # Path ###############################
+        self.CAMERA_INTRINSIC_PATH = '/home/icynunnymumu/Desktop/zed_new.json'
+        self.DATASET_FOLDER = "/home/icynunnymumu/Desktop/senior_sixd_dataset/"
+        self.MESH_FOLDER = "/home/icynunnymumu/senior_dataset/"
+
+        self.RANDOM_RANGE = 100 # Random Rotation 100 times
+
+        #################################33#
+
+        self.object_name = ['cereal', 'acnewash', 'contactcleaning', 'jbl', 'lactose', 'orange', 'purple', 'sunscreen']
+        # self.object_name = ['purple']
+        self.mesh_paths = []
+        for name in self.object_name:
+            self.mesh_paths.append(os.path.join(self.MESH_FOLDER, name, f"{name}_centered.stl"))
+
+        self.meshes = []
+        self.collision_objects = {}
+
+        self.create_subscription(PlanningScene, '/planning_scene', self.planning_scene_callback, 10)
+
+        self.create_subscription(String, '/republish_object', self.republish_obj_callback, 2)
+
+        self.collision_pub = self.create_publisher(CollisionObject, '/collision_object', 10)
+        self.pcl_pub = self.create_publisher(PointCloud2, '/rgbd_pointcloud', 10)
+
+        self.save_service = self.create_service(Trigger, '/save_objects', self.save_objects_callback)
+        self.save_client = self.create_client(Trigger, '/save_objects')
+        self.get_logger().info("Publishers, Subscribers, Servers, and Clients are intiialized.")
+        
+        self.num_scene = str(input('Input Scene Number please (1-99) : '))
+
+        self.mask_folder = os.path.join(self.DATASET_FOLDER, str(self.num_scene), "mask_original")
+
+        self.scene = os.path.join(self.DATASET_FOLDER, self.num_scene)
+
+        if not os.path.exists(self.mask_folder):
+            self.get_logger().error("No GT Mask in this scene. Exiting.")
+            rclpy.shutdown()
+
+        self.get_logger().info("Loading Meshes and Scenes.")
+
+        depth_path =  os.path.join(self.DATASET_FOLDER, str(self.num_scene), "depth.png")
+        rgb_path = os.path.join(self.DATASET_FOLDER, str(self.num_scene), "rgb.png")
+
+        self.depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+        self.rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
+        self.h, self.w = self.rgb.shape[:2]
+
+
+        if self.rgb is None or self.depth is None:
+            raise RuntimeError("Failed to load RGB or Depth images.")
+
+        with open(self.CAMERA_INTRINSIC_PATH, 'r') as f:
+            intrinsics_data = json.load(f)
+
+        self.K = np.array(intrinsics_data['cam_K']).reshape(3, 3)
+        self.fx = self.K[0, 0]
+        self.fy = self.K[1, 1]
+        self.cx = self.K[0, 2]
+        self.cy = self.K[1, 2]
+
+        self.load_meshes()
+
+        self.fit_pose = self.fit_gt_mask()
+        self.publish_scene_once(self.fit_pose)
+        self.is_saving = False
+        self.last_saved_poses = {}
+
+
+    def planning_scene_callback(self, msg):
+        self.collision_objects.clear()
+
+        for co in msg.world.collision_objects:
+            name = co.id
+            self.collision_objects[name] = co  # Save the full CollisionObject
+
+        # self.get_logger().info("Received PlanningScene update.")
+        # self.get_logger().info("Current Known Objects:")
+
+        for obj_name, obj_msg in self.collision_objects.items():
+            if not obj_msg.pose:
+                continue
+
+            pose = obj_msg.pose
+
+            # self.get_logger().info(
+            #     f" - {obj_name}: "
+            #     f"frame_id='{obj_msg.header.frame_id}', "
+            #     f"position=({pose.position.x:.3f}, {pose.position.y:.3f}, {pose.position.z:.3f}), "
+            #     f"orientation=({pose.orientation.x:.3f}, {pose.orientation.y:.3f}, {pose.orientation.z:.3f}, {pose.orientation.w:.3f})"
+            # )
+        request = Trigger.Request()
+        future = self.save_client.call_async(request)
+
+        def callback(fut):
+            res = fut.result()
+            if res.success:
+                self.get_logger().info("Saved objects and masks.")
+            else:
+                self.get_logger().warn("Failed to save objects and masks.")
+
+        future.add_done_callback(callback)
+
+    def fit_gt_mask(self):
+
+        fit_pose = []
+
+        for obj_name in self.object_name:
+            self.get_logger().info(f"Processing {obj_name}..................")
+            start_time = time.time()
+
+            # Read
+            gt_mask_path = os.path.join(self.mask_folder, f"{obj_name}_mask.png")
+            gt_mask = cv2.imread(gt_mask_path, cv2.IMREAD_UNCHANGED)
+            mesh_path = os.path.join(self.MESH_FOLDER, obj_name, f"{obj_name}_centered.stl")
+            
+            # Find Centroid of GT
+            ys, xs = np.nonzero(gt_mask)
+            x_center = xs.mean()
+            y_center = ys.mean()
+
+            u, v = int(round(x_center)), int(round(y_center))
+            self.get_logger().info(f"Centroid: x={u}, y={v}")
+
+            z = self.depth[v, u] + 20  # Object Depth - Can change
+            cam_K = self.K.flatten()
+            fx, fy = cam_K[0], cam_K[4]
+            cx, cy = cam_K[2], cam_K[5]
+            x = (u - cx) * z / fx
+            y = (v - cy) * z / fy
+
+            self.get_logger().info(f"X: {x}, Y: {y}, Z: {z}")
+
+            # Rotate to find by fit ####################################
+            # Mesh
+            mesh = o3d.io.read_triangle_mesh(mesh_path)
+            mesh.compute_vertex_normals()
+            vertices = np.asarray(mesh.vertices) / 1000.0  # mm to meters
+            triangles = np.asarray(mesh.triangles)
+
+            # sample every 15° around each axis
+            angles_deg = np.arange(0, 361, 45)
+            angles_rad = np.deg2rad(angles_deg)
+
+            best_pos = None
+            best_iou = -1
+            best_mask = None
+
+            # RANDOMMM
+            for i in range(self.RANDOM_RANGE):
+                roll, pitch, yaw = (
+                    np.random.randint(0, 360),
+                    np.random.randint(0, 360),
+                    np.random.randint(0, 360),
+                )
+                qx, qy, qz, qw = R.from_euler("xyz", [roll, pitch, yaw]).as_quat()
+
+                pose = [x / 1000, y / 1000, z / 1000, qx, qy, qz, qw]
+                mask = new_project_model_to_mask(
+                    cam_K=self.K.flatten(),
+                    triangles=triangles,
+                    vertices=vertices,
+                    pose=pose,
+                    image_h=self.h,
+                    image_w=self.w,
+                )
+                iou = get_iou(mask, gt_mask)
+
+                if iou > best_iou:
+                    best_iou = iou
+                    best_pos = pose
+                    best_mask = mask
+
+            self.get_logger().info(f"Best {obj_name} Pose at {best_pos} with IOU {best_iou}")
+
+            self.get_logger().info(f"{obj_name} finished in {time.time() - start_time} s.\n\n")
+
+            obj_pose = Pose()
+            obj_pose.position.x = pose[0] * 10
+            obj_pose.position.y = pose[1] * 10
+            obj_pose.position.z = pose[2] * 10
+            obj_pose.orientation.x = pose[3]
+            obj_pose.orientation.y = pose[4]
+            obj_pose.orientation.z = pose[5]
+            obj_pose.orientation.w = pose[6]
+
+            fit_pose.append(obj_pose)
+
+        return fit_pose
+
+    def load_meshes(self):
+        for path in self.mesh_paths:
+            mesh = trimesh.load_mesh(path)
+            time.sleep(0.3)
+
+            if isinstance(mesh, trimesh.Scene):
+                mesh = trimesh.util.concatenate(mesh.dump())
+            elif not isinstance(mesh, trimesh.Trimesh):
+                mesh = mesh.dump().sum()
+
+            mesh.apply_scale(0.01)
+
+            ros_mesh = Mesh()
+            for face in mesh.faces:
+                ros_mesh.triangles.append(MeshTriangle(vertex_indices=face))
+            for vertex in mesh.vertices:
+                ros_mesh.vertices.append(Point(x=vertex[0], y=vertex[1], z=vertex[2]))
+
+            time.sleep(0.8)
+
+            self.meshes.append(ros_mesh)
+
+    def publish_scene_once(self, fit_pose):
+        for idx, (ros_mesh, fit_obj_pose) in enumerate(zip(self.meshes, fit_pose)):
+            obj = CollisionObject()
+
+            time.sleep(0.1)
+
+            name = self.object_name[idx]
+            obj.id = name
+            obj.meshes.append(ros_mesh)
+            time.sleep(1)
+
+            # pose = Pose()
+            # pose.position.x = 0.0
+            # pose.position.y = 0.0
+            # pose.position.z = 0.0
+            # pose.orientation.w = 1.0
+
+            obj.mesh_poses.append(fit_obj_pose)
+            obj.operation = CollisionObject.ADD
+            time.sleep(1)
+
+            obj.header = Header()
+            now = self.get_clock().now().to_msg()
+            obj.header.stamp = now
+            obj.header.frame_id = '/world'
+            self.collision_pub.publish(obj)
+            self.get_logger().info(f"Adding {name}...")
+            time.sleep(1)
+            # self.collision_objects[name] = obj
+
+            obj.header = Header()
+            now = self.get_clock().now().to_msg()
+            obj.header.stamp = now
+            obj.header.frame_id = '/world'
+            self.collision_pub.publish(obj)
+            self.get_logger().info(f"Adding {name}...")
+            time.sleep(1)
+            self.collision_objects[name] = obj
+            time.sleep(0.1)
+
+
+        points = []
+        h, w = self.depth.shape
+        for v in range(h):
+            for u in range(w):
+                z = self.depth[v, u] / 1000.0
+                if z == 0:
+                    continue
+                x = (u - self.cx) * z / self.fx
+                y = (v - self.cy) * z / self.fy
+                x *= 10
+                y *= 10
+                z *= 10
+                b, g, r = self.rgb[v, u]
+                rgb = (int(r) << 16) | (int(g) << 8) | int(b)
+                points.append([x, y, z, rgb])
+
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+        ]
+
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = '/world'
+
+        pcl_msg = point_cloud2.create_cloud(header, fields, points)
+        self.pcl_pub.publish(pcl_msg)
+        self.get_logger().info("All objects and point cloud published once.")
+
+    def save_objects_callback(self, request, response):
+        self.get_logger().info("Saving all objects...")
+        save_data = {"pose": {}}
+
+        for obj_name, obj_msg in self.collision_objects.items():
+            if not hasattr(obj_msg, 'pose'):
+                continue
+
+            pose = obj_msg.pose
+            current_pos = (pose.position.x, pose.position.y, pose.position.z)
+            current_ori = (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w)
+
+            # if obj_name in self.last_saved_poses:
+            #     last_pos, last_ori = self.last_saved_poses[obj_name]
+            #     if np.allclose(current_pos, last_pos, atol=1e-4) and np.allclose(current_ori, last_ori, atol=1e-4):
+            #         continue
+
+            self.last_saved_poses[obj_name] = (current_pos, current_ori)
+
+            pose = obj_msg.pose
+            qx, qy, qz, qw = pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
+
+            r = R.from_quat([qx, qy, qz, qw])
+            rotation_matrix = r.as_matrix()
+            translation = np.array([
+                pose.position.x / 10.0,
+                pose.position.y / 10.0,
+                pose.position.z / 10.0
+            ])
+
+            # Save 6D pose
+            save_data["pose"][obj_name] = {
+                "quaternion": {
+                    "x": pose.position.x / 10,
+                    "y": pose.position.y / 10,
+                    "z": pose.position.z / 10,
+                    "qx": qx,
+                    "qy": qy,
+                    "qz": qz,
+                    "qw": qw
+                },
+                "rotation": rotation_matrix.tolist(),
+                "translation": translation.tolist()
+            }
+
+            mesh_path = os.path.join(self.MESH_FOLDER, obj_name, f"{obj_name}_centered.stl")
+
+            pose_array = [
+                pose.position.x / 10,
+                pose.position.y / 10,
+                pose.position.z / 10,
+                qx, qy, qz, qw
+            ]
+
+            mask = project_model_to_mask(
+                cam_K=self.K.flatten(),
+                ply_path=mesh_path,
+                rgb_image=self.rgb,
+                pose=pose_array
+            )
+
+            mask_path = os.path.join(self.scene, "mask", f"{obj_name}_mask.png")
+            # self.scene + 'mask/'+ obj_name +'_mask.png'
+            cv2.imwrite(mask_path, mask)
+            # self.get_logger().info(f"Saved binary mask to {mask_path}")
+
+            masked_rgb = cv2.bitwise_and(self.rgb, self.rgb, mask=mask)
+            masked_rgb_path = os.path.join(self.scene, "mask", f"{obj_name}_mask_rgb.png")
+            cv2.imwrite(masked_rgb_path, masked_rgb)
+            # self.get_logger().info(f"Saved masked RGB to {masked_rgb_path}")
+
+            rle = mask_utils.encode(np.asfortranarray(mask.astype(np.uint8)))
+            rle['counts'] = rle['counts'].decode('utf-8')
+
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            polygons = [cnt.flatten().tolist() for cnt in contours if len(cnt) >= 3]
+
+            if "segmentation" not in save_data:
+                save_data["segmentation"] = {}
+
+            save_data["segmentation"][obj_name] = {
+                "rle": rle,
+                "polygons": polygons
+            }
+
+        output_path = os.path.join(self.scene, "res.json")
+        with open(output_path, 'w') as f:
+            json.dump(save_data, f, indent=4)
+
+        # self.get_logger().info(f"Saved all poses to {output_path}")
+
+        response.success = True
+        response.message = f"Saved all poses and masks successfully. Result save to {output_path}"
+        return response
+    
+    def republish_obj_callback(self, msg:String):
+
+        target_obj = msg.data
+
+        if target_obj not in self.object_name:
+            self.get_logger().error("Invalid Object")
+            return
+
+        idx = self.object_name.index(target_obj)
+
+        ros_mesh = self.meshes[idx]
+        fit_obj_pose = self.fit_pose[idx]
+            
+        obj = CollisionObject()
+
+        time.sleep(0.1)
+
+        name = self.object_name[idx]
+        obj.id = name
+        obj.meshes.append(ros_mesh)
+        time.sleep(1)
+
+        obj.mesh_poses.append(fit_obj_pose)
+        obj.operation = CollisionObject.ADD
+        time.sleep(1)
+
+        obj.header = Header()
+        now = self.get_clock().now().to_msg()
+        obj.header.stamp = now
+        obj.header.frame_id = '/world'
+        self.collision_pub.publish(obj)
+        self.get_logger().info(f"Readding {name}...")
+        time.sleep(1)
+
+
+def main():
+    rclpy.init()
+    node = ScenePublisher()
+    rclpy.spin(node)
+
+if __name__ == '__main__':
+    main()
