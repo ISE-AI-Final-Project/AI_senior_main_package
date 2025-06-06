@@ -43,7 +43,7 @@ class MonteCarloRandomIK(Node):
             self.get_logger().info('Waiting for ik_pass_count…')
 
         # 2) MC parameters
-        self.num_samples = 100
+        self.num_samples = 10000
         self.poses_per_sample = 1
         self.x_bounds = (-0.5, 0.5)
         self.y_bounds = (-0.5, 0.5)

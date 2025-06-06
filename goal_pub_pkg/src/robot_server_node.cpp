@@ -32,11 +32,13 @@ moveit::planning_interface::MoveGroupInterface::Plan home_plan_global;
 
 rclcpp::Client<Trigger>::SharedPtr client_add;
 rclcpp::Client<Trigger>::SharedPtr client_remove;
+rclcpp::Client<Trigger>::SharedPtr client_attach;
+rclcpp::Client<Trigger>::SharedPtr client_detach;
 
 
 
 std::map<std::string, double> home_joint_values = {
-    {"shoulder_pan_joint", 0},
+    {"shoulder_pan_joint", -1.570},
     {"shoulder_lift_joint", -1.570},
     {"elbow_joint", 0},
     {"wrist_1_joint", -1.570},
@@ -205,6 +207,12 @@ void handle_grip_trigger_request(
         return;
     }
 
+    // Remove Collision
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto result = client_remove->async_send_request(request);
+    RCLCPP_INFO(LOGGER, "Removing Collision");
+    rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
     std::vector<geometry_msgs::msg::Pose> waypoints;
     // waypoints.push_back(successful_aim_pose);
     waypoints.push_back(successful_grip_pose);
@@ -216,14 +224,16 @@ void handle_grip_trigger_request(
 
     RCLCPP_INFO(LOGGER, "Computing Cartesian path from aim to grip pose...");
 
+    int total_retry = 0;
     while (fraction < 1.0)
     {
         fraction = move_group->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory_msg);
-        if (fraction < 1.0)
+        if (fraction < 1.0 and total_retry < 10)
         {
             RCLCPP_WARN(LOGGER, "Cartesian path incomplete (%.2f%%), retrying...", fraction * 100.0);
             rclcpp::sleep_for(std::chrono::milliseconds(200));
         }
+        total_retry++;
     }
 
     moveit::planning_interface::MoveGroupInterface::Plan cartesian_plan;
@@ -247,6 +257,12 @@ void handle_grip_trigger_request(
 
     visual_tools->deleteAllMarkers();
     visual_tools->trigger();
+
+    // Add Collision
+    auto request2 = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto result2 = client_add->async_send_request(request2);
+    RCLCPP_INFO(LOGGER, "Adding Collision");
+    rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
 }
 
 
@@ -271,6 +287,13 @@ void handle_home_trigger_request(
     rclcpp::Time lift_start_time = node->now();
     rclcpp::Duration lift_timeout = rclcpp::Duration::from_seconds(5.0);
 
+
+    // Detach Collision
+    auto request1 = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto result1 = client_detach->async_send_request(request1);
+    RCLCPP_INFO(LOGGER, "Detach Collision");
+    rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
     while (fraction < 1.0)
     {
         fraction = move_group->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory_msg);
@@ -291,6 +314,7 @@ void handle_home_trigger_request(
         rclcpp::sleep_for(std::chrono::milliseconds(200));
     }
 
+
     if (fraction >= 1.0)
     {
         moveit::planning_interface::MoveGroupInterface::Plan lift_plan;
@@ -306,10 +330,17 @@ void handle_home_trigger_request(
 
     RCLCPP_INFO(LOGGER, "Attempting to plan to home position (with 10s timeout)...");
 
+    // Attach Collision
+    auto request2 = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto result2 = client_attach->async_send_request(request2);
+    RCLCPP_INFO(LOGGER, "Attach Collision");
+    rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
+
     move_group->setJointValueTarget(home_joint_values);
 
     rclcpp::Time start_time = node->now();
-    rclcpp::Duration timeout = rclcpp::Duration::from_seconds(10.0);
+    rclcpp::Duration timeout = rclcpp::Duration::from_seconds(5.0);
     bool success = false;
 
     while ((node->now() - start_time) < timeout)
@@ -325,6 +356,33 @@ void handle_home_trigger_request(
 
     if (success) {RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");}
     else {RCLCPP_ERROR(LOGGER, "Failed to plan to home within 10 seconds.");}
+
+
+    // Remove Collision
+
+    // Detach Collision
+    auto request3 = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto result3 = client_detach->async_send_request(request3);
+    RCLCPP_INFO(LOGGER, "Detach Collision");
+    rclcpp::sleep_for(std::chrono::milliseconds(500)); // Sleep for 0.5 seconds
+
+
+    rclcpp::Time start_time2 = node->now();
+    rclcpp::Duration timeout2 = rclcpp::Duration::from_seconds(5.0);
+    while ((node->now() - start_time2) < timeout2)
+    {
+        if (move_group->plan(home_plan_global) == moveit::core::MoveItErrorCode::SUCCESS)
+        {
+            success = true;
+            RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");
+            break;
+        }
+        rclcpp::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    if (success) {RCLCPP_INFO(LOGGER, "Successfully planned to home within timeout.");}
+    else {RCLCPP_ERROR(LOGGER, "Failed to plan to home within 10 seconds.");}
+
 
     if (!success)
     {
@@ -458,6 +516,11 @@ int main(int argc, char **argv)
 
     client_add = node->create_client<Trigger>("add_collision_object");
     client_remove = node->create_client<Trigger>("remove_collision_object");
+
+    client_attach = node->create_client<Trigger>("attach_collision_object");
+
+    client_detach = node->create_client<Trigger>("detach_collision_object");
+
 
     RCLCPP_INFO(LOGGER, "Manipulation Server is ready.");
 

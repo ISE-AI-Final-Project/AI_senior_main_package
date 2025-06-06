@@ -83,7 +83,9 @@ class MyGripperWithContact:
         )
 
         self.obb_gripper_range = o3d.geometry.OrientedBoundingBox(
-            center=np.array((0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)),
+            center=np.array(
+                (0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)
+            ),
             R=np.identity(3),
             extent=np.array(
                 (
@@ -95,7 +97,9 @@ class MyGripperWithContact:
         )
 
         self.obb_back = o3d.geometry.OrientedBoundingBox(
-            center=np.array((0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)),
+            center=np.array(
+                (0, 0, -hand_length - back_thickness / 2 + gripper_in_offset)
+            ),
             R=np.identity(3),
             extent=np.array(
                 (
@@ -385,7 +389,11 @@ class MyGripperWithContact:
         ]
 
         return cylinder_list
-    
+
+    def move_in(self, distance=10):
+        # Move distance in +Z direction
+        self.translate(distance * self.HT[:3, 2])
+
 
 if __name__ == "__main__":
     my_gripper = MyGripperWithContact(
@@ -435,6 +443,8 @@ if __name__ == "__main__":
     o3d.visualization.draw_geometries([*my_gripper.geometries(), world_axis])
 
     o3d.visualization.draw_geometries([world_axis, *my_gripper.get_skeleton()])
+
+    # my_gripper.move_in(-20)
 
     my_gripper.close_to(d=1)
 

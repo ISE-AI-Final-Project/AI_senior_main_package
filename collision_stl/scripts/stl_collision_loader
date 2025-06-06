@@ -3,6 +3,7 @@
 import os
 import time
 
+import numpy as np
 import rclpy
 import trimesh
 from geometry_msgs.msg import Point, Pose, PoseStamped
@@ -34,6 +35,10 @@ class STLCollisionPublisher(Node):
         self.remove_service = self.create_service(
             Trigger, "add_collision_object", self.add_collision_callback
         )
+
+        self.remove_service = self.create_service(
+            Trigger, "add_collision_object_big_small", self.add_collision_big_small_callback
+        )
         self.remove_service = self.create_service(
             Trigger, "remove_collision_object", self.remove_collision_callback
         )
@@ -43,12 +48,18 @@ class STLCollisionPublisher(Node):
         self.detach_service = self.create_service(
             Trigger, "detach_collision_object", self.detach_collision_callback
         )
+        self.attach_service = self.create_service(
+            Trigger, "attach_collision_object_big_small", self.attach_collision_big_small_callback
+        )
+        self.detach_service = self.create_service(
+            Trigger, "detach_collision_object_big_small", self.detach_collision_big_small_callback
+        )
 
         self.last_pose = None
         self.ros_mesh = None
+        self.ros_mesh_list = None
 
-
-    def load_and_convert_mesh(self, path):
+    def load_and_convert_mesh(self, path, scale=0.001):
         self.get_logger().info(f"Loading mesh from: {path}")
         mesh = trimesh.load_mesh(path)
 
@@ -57,7 +68,7 @@ class STLCollisionPublisher(Node):
         elif not isinstance(mesh, trimesh.Trimesh):
             mesh = mesh.dump().sum()
 
-        mesh.apply_scale(0.001)
+        mesh.apply_scale(scale)
         self.get_logger().info(
             f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces"
         )
@@ -78,6 +89,9 @@ class STLCollisionPublisher(Node):
             dataset_path_prefix, target_obj, f"{target_obj}_centered.stl"
         )
         self.ros_mesh = self.load_and_convert_mesh(mesh_path)
+
+        self.ros_mesh_list = [self.load_and_convert_mesh(mesh_path, scale=s) for s in np.arange(0.0001, 0.0015, 0.0001)]
+        # self.ros_mesh_s = self.load_and_convert_mesh(mesh_path, scale=0.0005)
 
         self.last_pose = request.object_pose.pose
         self.get_logger().info(
@@ -129,6 +143,46 @@ class STLCollisionPublisher(Node):
         response.success = True
         response.message = "Object removed from planning scene"
         return response
+    
+    def add_collision_big_small_callback(self, request, response):
+        # Step 1: Remove existing object
+        remove = CollisionObject()
+        remove.id = "object_big"
+        remove.header.frame_id = "world"
+        remove.operation = CollisionObject.REMOVE
+        self.collision_pub_.publish(remove)
+        time.sleep(0.1)
+
+        # Step 2: Add new object at received pose
+        obj = CollisionObject()
+        obj.id = "object_big"
+        obj.header.frame_id = "world"
+        obj.meshes = [self.ros_mesh_b]
+        obj.mesh_poses = [self.last_pose]
+        obj.operation = CollisionObject.ADD
+        self.collision_pub_.publish(obj)
+
+               # Step 1: Remove existing object
+        remove = CollisionObject()
+        remove.id = "object_small"
+        remove.header.frame_id = "world"
+        remove.operation = CollisionObject.REMOVE
+        self.collision_pub_.publish(remove)
+        time.sleep(0.1)
+
+        # Step 2: Add new object at received pose
+        obj = CollisionObject()
+        obj.id = "object_small"
+        obj.header.frame_id = "world"
+        obj.meshes = [self.ros_mesh_s]
+        obj.mesh_poses = [self.last_pose]
+        obj.operation = CollisionObject.ADD
+        self.collision_pub_.publish(obj)
+
+        self.get_logger().info("Collision object updated in planning scene.")
+        response.success = True
+        response.message = "Object removed from planning scene"
+        return response
 
     def remove_collision_callback(self, request, response):
         remove = CollisionObject()
@@ -162,11 +216,49 @@ class STLCollisionPublisher(Node):
         attached.object.mesh_poses = [self.last_pose]
         attached.object.operation = CollisionObject.ADD
         attached.touch_links = [
-            "robotiq_hande_left_finger_link",
-            "robotiq_hande_right_finger_link",
+            "robotiq_hande_left_finger",
+            "robotiq_hande_right_finger",
+            "robotiq_hande_link",
         ]
 
         self.attached_pub_.publish(attached)
+
+        response.success = True
+        response.message = "Object attached to gripper"
+        return response
+    
+    def attach_collision_big_small_callback(self, request, response):
+        if self.last_pose is None:
+            response.success = False
+            response.message = "No pose to attach"
+            return response
+        
+        if self.ros_mesh_list:
+            for i, rosmesh in enumerate(self.ros_mesh_list[::-1]):
+                remove = CollisionObject()
+                remove.id = f"object{i}"
+                remove.header.frame_id = "world"
+                remove.operation = CollisionObject.REMOVE
+                self.collision_pub_.publish(remove)
+                time.sleep(0.2)
+
+                attached = AttachedCollisionObject()
+                attached.link_name = "robotiq_hande_end"
+                attached.object.id = f"object{i}"
+                attached.object.header.frame_id = "world"
+                attached.object.meshes = [rosmesh]
+                attached.object.mesh_poses = [self.last_pose]
+                attached.object.operation = CollisionObject.ADD
+                attached.touch_links = [
+                    "robotiq_hande_left_finger",
+                    "robotiq_hande_right_finger",
+                    "robotiq_hande_link",
+                ]
+
+                self.attached_pub_.publish(attached)
+
+            time.sleep(3)
+
 
         response.success = True
         response.message = "Object attached to gripper"
@@ -188,6 +280,31 @@ class STLCollisionPublisher(Node):
         remove.header.frame_id = "world"
         remove.operation = CollisionObject.REMOVE
         self.collision_pub_.publish(remove)
+
+        response.success = True
+        response.message = "Object detached and removed"
+        return response
+    
+    def detach_collision_big_small_callback(self, request, response):
+        self.get_logger().info("Detaching and removing object from gripper and world")
+
+        if self.ros_mesh_list:
+
+            for i, rosmesh in enumerate(self.ros_mesh_list[::-1]):
+                detach = AttachedCollisionObject()
+                detach.link_name = "robotiq_hande_end"
+                detach.object.id = f"object{i}"
+                detach.object.header.frame_id = "world"
+                detach.object.operation = CollisionObject.REMOVE
+                self.attached_pub_.publish(detach)
+                time.sleep(0.2)
+
+                remove = CollisionObject()
+                remove.id = f"object{i}"
+                remove.header.frame_id = "world"
+                remove.operation = CollisionObject.REMOVE
+                self.collision_pub_.publish(remove)
+                time.sleep(0.2)
 
         response.success = True
         response.message = "Object detached and removed"

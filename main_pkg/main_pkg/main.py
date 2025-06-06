@@ -83,6 +83,10 @@ class MainNode(Node):
             "clear_pointcloud": self.command_clear_pointcloud,
             "auto_fuse_pointcloud": self.command_auto_fuse_pointcloud,
             "fake_joint_state_pub": self.fake_joint_state_pub,
+            "grip_and_attach": self.command_grip_and_attach,
+            "republish_stl": self.call_make_stl_collision,
+            "clear_planning_scene": self.command_clear_planning_scene,
+
         }
 
         """
@@ -311,6 +315,11 @@ class MainNode(Node):
 
         self.client_attach = self.create_client(Trigger, "attach_collision_object")
         self.client_detach = self.create_client(Trigger, "detach_collision_object")
+
+        self.client_attach_big_small = self.create_client(Trigger, "attach_collision_object_big_small")
+        self.client_detach_big_small = self.create_client(Trigger, "detach_collision_object_big_small")
+
+        self.client_clear_planning_scene = self.create_client(Trigger, "clear_planning_scene")
 
         self.client_fuse_pointcloud = self.create_client(PCLFuse, "pcl_fuse")
         self.client_camera_ik_joint_state = self.create_client(
@@ -819,9 +828,12 @@ class MainNode(Node):
         if self.is_empty(self.data_pointcloud):
             self.elog("Cannot make Collision. Capture pointcloud first.")
             return
+        
+        self.log("Attach Big Small Object")
+        self.service_trigger_and_wait(self.client_attach_big_small)
 
         request = PointCloudSend.Request()
-        request.pointcloud = self.data_pointcloud  # Correct field assignment
+        request.pointcloud = self.data_pointcloud_fused  # Correct field assignment
 
         # Call
         make_collision_response = await self.call_service(
@@ -829,7 +841,11 @@ class MainNode(Node):
         )
         if not make_collision_response:
             return
+        
 
+        self.log("Detach Big Small Object")
+        self.service_trigger_and_wait(self.client_detach_big_small)
+        
         # Response
         self.log(f"Make Collision Success")
 
@@ -855,6 +871,9 @@ class MainNode(Node):
         req.target_object = self.get_str_param("target_obj")
         req.dataset_path_prefix = self.get_str_param("dataset_path_prefix")
         req.camera_info = self.camera_info
+
+        # Attach Object
+        # self.command_attach_object()
 
         # Call
         make_collision_with_mask_response = await self.call_service(
@@ -898,6 +917,8 @@ class MainNode(Node):
 
             # Response
             self.log(f"Make Collision Success")
+
+            # self.command_detach_object()
 
         except Exception as e:
             self.elog(f"Failed to make collision with mask: -> {e}")
@@ -970,7 +991,7 @@ class MainNode(Node):
         if not collision_aim_response:
             self.get_logger().warn("Error in Aim Collision Check.")
             return
-        self.log(f"Aim Response: {collision_aim_response.pass_list}")
+        # self.log(f"Aim Response: {collision_aim_response.pass_list}")
 
         # Step 3.2: Grip Collision Check
         collision_grip_request = JointStateCollisionBool.Request()
@@ -984,7 +1005,7 @@ class MainNode(Node):
             self.get_logger().warn("Error in Grip Collision Check.")
             return
 
-        self.log(f"Grip Response: {collision_grip_response.pass_list}")
+        # self.log(f"Grip Response: {collision_grip_response.pass_list}")
 
         # Output
         filter_sorted_aim_posearray = PoseArray()
@@ -1001,14 +1022,14 @@ class MainNode(Node):
             zip(collision_aim_response.pass_list, collision_grip_response.pass_list)
         ):
 
-            self.log(f"{i}, {aim_pass}, {grip_pass}")
+            # self.log(f"{i}, {aim_pass}, {grip_pass}")
             if aim_pass and grip_pass:
-                self.log(f"{i} Passed")
-                self.log(f"{str(ik_response.sorted_aim_poses.poses[i])} Passed")
-                self.log(f"{ik_response.sorted_grip_poses.poses[i]} Passed")
+                # self.log(f"{i} Passed")
+                # self.log(f"{str(ik_response.sorted_aim_poses.poses[i])} Passed")
+                # self.log(f"{ik_response.sorted_grip_poses.poses[i]} Passed")
 
-                self.log(f"{ik_response.gripper_distance[i]} Passed")
-                self.log(f"{ik_response.possible_aim_joint_state[i]} Passed")
+                # self.log(f"{ik_response.gripper_distance[i]} Passed")
+                # self.log(f"{ik_response.possible_aim_joint_state[i]} Passed")
                 filter_sorted_aim_posearray.poses.append(
                     ik_response.sorted_aim_poses.poses[i]
                 )
@@ -1021,8 +1042,8 @@ class MainNode(Node):
                 filter_aim_joint_state.append(ik_response.possible_aim_joint_state[i])
                 total_pass += 1
 
-            else:
-                self.log(f"{i} Failed")
+            # else:
+                # self.log(f"{i} Failed")
 
         self.data_aim_joint_state_filter = filter_aim_joint_state
         self.data_sorted_grasp_aim_pose_filter = filter_sorted_aim_posearray
@@ -1096,8 +1117,13 @@ class MainNode(Node):
 
     ## CLIENT: DETACH OBJECT ###########################################
     def command_detach_object(self):
-        self.log("Detach ObjectE")
+        self.log("Detach Object")
         self.service_trigger_and_wait(self.client_detach)
+
+        ## CLIENT: DETACH OBJECT ###########################################
+    def command_clear_planning_scene(self):
+        self.log("Clear Planning Scene")
+        self.service_trigger_and_wait(self.client_clear_planning_scene)
 
     ## CLIENT: GRIPPER CONTROL ########################################
     async def srv_gripper_control_send_distance(self, distance_mm, pub_joint=False):
@@ -1131,6 +1157,11 @@ class MainNode(Node):
             )
         else:
             await self.srv_gripper_control_send_distance(distance_mm=0)
+
+    ## GRIP AND ATTACH ##################################
+    async def command_grip_and_attach(self):
+        await self.command_gripper_close()
+        self.command_attach_object()
 
     ## FAKE POINT CLOUD ########################################
     async def command_fake_point_cloud(self):

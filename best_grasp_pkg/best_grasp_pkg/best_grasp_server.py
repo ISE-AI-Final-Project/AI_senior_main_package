@@ -41,7 +41,8 @@ class BestGraspService(Node):
             if transformed_pose is not None:
                 transformed_grasps.append((grasp, transformed_pose))
             else:
-                self.get_logger().warn(f"Skipping grasp {i} due to failed transform.")
+                continue
+                # self.get_logger().warn(f"Skipping grasp {i} due to failed transform.")
 
         if not transformed_grasps:
             self.get_logger().warn(
@@ -60,7 +61,7 @@ class BestGraspService(Node):
         try:
             tf_robot = self.tf_buffer.lookup_transform(
                 "world",
-                "base_link",
+                "shoulder_link",
                 rclpy.time.Time(),
                 rclpy.duration.Duration(seconds=1.0),
             )
@@ -86,7 +87,7 @@ class BestGraspService(Node):
 
         grasp_candidates = []
         for i, (grasp_msg, grasp_grip_end) in enumerate(transformed_grasps):
-            self.get_logger().info(f"i = {i}")
+            # self.get_logger().info(f"i = {i}")
 
             grasp_aim_end = chain_poses(aim_offset, grasp_grip_end)
 
@@ -109,10 +110,10 @@ class BestGraspService(Node):
             grip_to_base = np.linalg.norm(grip_pos - robot_base_position)
             aim_to_base = np.linalg.norm(aim_pos - robot_base_position)
 
-            self.get_logger().info(f"grip_to_base = {grip_to_base}")
-            self.get_logger().info(f"aim_to_base = {aim_to_base}")
+            # self.get_logger().info(f"grip_to_base = {grip_to_base}")
+            # self.get_logger().info(f"aim_to_base = {aim_to_base}")
             # Reject if either is farther than 0.5m
-            if grip_to_base > 0.5 or aim_to_base > 0.5:
+            if grip_to_base > 0.7 or aim_to_base > 0.7:
                 continue
 
             # Get Z-axis direction
@@ -133,7 +134,8 @@ class BestGraspService(Node):
 
             # Score: smaller grip distance + Z-down preference
             score = (
-                0.5 * (1 - (grip_to_base))  # closer grip = better  range 0.15-0.5
+                0.5 * (1 - (abs(grip_to_base - 0.25) / 0.25))  # Assume 0.25 cm is best
+                # 0.5 * (1 - (grip_to_base))  # closer grip = better  range 0.15-0.5
                 + 0.3 * gravity_score  # downward Z-axis
                 + 0.1 * (1 - (grasp_msg.d_to_com))  # closer to CoM
                 + 0.1 * grasp_msg.gripper_score  # gripper success prediction
@@ -144,11 +146,18 @@ class BestGraspService(Node):
             )
 
         # Sort by score (descending)
-        sorted_grasp_pair = sorted(grasp_candidates, key=lambda x: x[0], reverse=True)
+        sorted_grasp_pair = list(sorted(grasp_candidates, key=lambda x: x[0], reverse=True))
+
+        # Top 200 only
+        # if len(sorted_grasp_pair) > 200:
+        #     sorted_grasp_pair = sorted_grasp_pair[:200]
+
         sorted_score = [s for s, _, _, _ in sorted_grasp_pair]
         sorted_grip = [g for _, g, _, _ in sorted_grasp_pair]
         sorted_aim = [g for _, _, g, _ in sorted_grasp_pair]
         sorted_grip_distance = [d for _, _, _, d in sorted_grasp_pair]
+
+
 
         # Pack into PoseArray
         sorted_grip_poses_array = PoseArray()

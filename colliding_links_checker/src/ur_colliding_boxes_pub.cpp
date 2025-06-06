@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <custom_srv_pkg/msg/string_array.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 // URDF and SRDF
 #include <urdf_parser/urdf_parser.h>
@@ -15,7 +16,7 @@
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_model/robot_model.h>
 
-// TF2 for transforming poses
+// TF2 for transforming poses1
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -25,6 +26,10 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
+
+using std::placeholders::_1;
+using std::placeholders::_2;
+using Trigger = std_srvs::srv::Trigger;
 
 class GetPlanningSceneClient : public rclcpp::Node
 {
@@ -42,6 +47,11 @@ public:
         std::bind(&GetPlanningSceneClient::planningSceneCallback, this, std::placeholders::_1));
 
     client_get_planning_scene = this->create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
+
+    // Service to clear the planning scene (world + attached)
+    clear_scene_service_ = create_service<Trigger>(
+        "clear_planning_scene",
+        std::bind(&GetPlanningSceneClient::handleClearPlanningScene, this, _1, _2));
 
     RCLCPP_INFO(this->get_logger(), "Node initialized.");
   }
@@ -85,6 +95,7 @@ private:
     auto request = std::make_shared<moveit_msgs::srv::GetPlanningScene::Request>();
     request->components.components = moveit_msgs::msg::PlanningSceneComponents::SCENE_SETTINGS |
                                      moveit_msgs::msg::PlanningSceneComponents::ROBOT_STATE |
+                                     moveit_msgs::msg::PlanningSceneComponents::ROBOT_STATE_ATTACHED_OBJECTS |
                                      moveit_msgs::msg::PlanningSceneComponents::WORLD_OBJECT_NAMES |
                                      moveit_msgs::msg::PlanningSceneComponents::WORLD_OBJECT_GEOMETRY;
 
@@ -104,6 +115,8 @@ private:
 
     planning_scene_->usePlanningSceneMsg(response->scene);
     RCLCPP_INFO(this->get_logger(), "Received base planning scene with %zu objects.", response->scene.world.collision_objects.size());
+
+    RCLCPP_INFO(this->get_logger(), "Received base planning scene with %zu  Attach Collision objects.", response->scene.robot_state.attached_collision_objects.size());
 
     for (const auto &obj : received_objects_)
     {
@@ -133,20 +146,27 @@ private:
         bool is_link1_robot = robot_model_->hasLinkModel(link1);
         bool is_link2_robot = robot_model_->hasLinkModel(link2);
 
-        // if (is_link1_robot && !is_link2_robot && link1 != "table")
-        //   removal_ids.insert(link2);
-        // else if (is_link2_robot && !is_link1_robot && link2 != "table")
-        //   removal_ids.insert(link1);
+        // Remove collided Attached Object
 
-        if (is_link1_robot && !is_link2_robot)
+        if (link1.find("object") != std::string::npos && !is_link2_robot)
         {
           removal_ids.insert(link2);
-          RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link2.c_str());
         }
-        else if (is_link2_robot && !is_link1_robot)
+        if (link2.find("object") != std::string::npos&& !is_link1_robot)
         {
           removal_ids.insert(link1);
-          RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link1.c_str());
+        }
+
+        //  Remove objects collided with Robot
+        if (is_link1_robot && !is_link2_robot && (link2 != "object"))
+        {
+          removal_ids.insert(link2);
+          // RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link2.c_str());
+        }
+        else if (is_link2_robot && !is_link1_robot && (link1 != "object"))
+        {
+          removal_ids.insert(link1);
+          // RCLCPP_WARN(this->get_logger(), "Contact: %s <--> %s : Removing %s", link1.c_str(), link2.c_str(), link1.c_str());
         }
       }
     }
@@ -171,10 +191,37 @@ private:
     }
   }
 
+  // Handler: clear everything from the planning scene
+  void handleClearPlanningScene(
+      const Trigger::Request::SharedPtr /*req*/,
+      Trigger::Response::SharedPtr res)
+  {
+    moveit::planning_interface::PlanningSceneInterface psi;
+
+    // remove all world collision objects
+    std::vector<std::string> world_objs = psi.getKnownObjectNames();
+    if (!world_objs.empty())
+      psi.removeCollisionObjects(world_objs);
+
+    // // remove all attached objects
+    // auto attached = psi.getAttachedObjects();
+    // std::vector<std::string> attached_ids;
+    // attached_ids.reserve(attached.size());
+    // for (const auto &kv : attached)
+    //   attached_ids.push_back(kv.first);
+    // if (!attached_ids.empty())
+    //   psi.removeAttachedObjects(attached_ids);
+
+    res->success = true;
+    res->message = "Planning scene cleared (world + attached objects).";
+    RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
+  }
+
   // ROS Interfaces
   rclcpp::Client<moveit_msgs::srv::GetPlanningScene>::SharedPtr client_get_planning_scene;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_sub_;
   rclcpp::Subscription<moveit_msgs::msg::PlanningScene>::SharedPtr planning_scene_sub_;
+  rclcpp::Service<Trigger>::SharedPtr clear_scene_service_;
 
   // MoveIt Models
   moveit::core::RobotModelPtr robot_model_;

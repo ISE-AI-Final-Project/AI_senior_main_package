@@ -115,11 +115,11 @@ class ScenePublisher(Node):
         super().__init__('scene_publisher')
 
         # Path ###############################
-        self.CAMERA_INTRINSIC_PATH = '/home/icynunnymumu/Desktop/zed_new.json'
-        self.DATASET_FOLDER = "/home/icynunnymumu/Desktop/senior_sixd_dataset/"
-        self.MESH_FOLDER = "/home/icynunnymumu/senior_dataset/"
+        self.CAMERA_INTRINSIC_PATH = '/home/icetenny/senior-2/zed_new.json'
+        self.DATASET_FOLDER = "/home/icetenny/senior-2/senior_sixd_dataset/"
+        self.MESH_FOLDER = "/home/icetenny/senior-2/senior_dataset/"
 
-        self.RANDOM_RANGE = 100 # Random Rotation 100 times
+        self.RANDOM_RANGE = 250 # Random Rotation 100 times
 
         #################################33#
 

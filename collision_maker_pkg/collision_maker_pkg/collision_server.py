@@ -26,8 +26,8 @@ class CollisionMakerService(Node):
 
 
         self.VOXEL_SIZE = 0.01
-        self.MAX_DISTANCE=0.75
-        self.MIN_PCL_PER_CUBE=3
+        self.MAX_DISTANCE=0.7
+        self.MIN_PCL_PER_CUBE=15
 
         self.get_logger().info("CollisionMaker service is ready.")
 
@@ -116,6 +116,9 @@ class CollisionMakerService(Node):
                     center_x = min_bound[0] + (x + 0.5) * voxel_size
                     center_y = min_bound[1] + (y + 0.5) * voxel_size
                     center_z += min_bound[2]
+
+                    # if height == voxel_size:
+                    #     continue
                     merged_cubes.append((center_x, center_y, center_z, height))
                     start_z = z
                 prev_z = z

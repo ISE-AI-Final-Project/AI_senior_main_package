@@ -175,8 +175,7 @@ private:
 
           if (!entry_exists || allowed_collision_type != collision_detection::AllowedCollision::ALWAYS)
           {
-            RCLCPP_INFO(this->get_logger(), "%s <----> %s.", link1.c_str(), link2.c_str());
-
+            // RCLCPP_INFO(this->get_logger(), "%s <----> %s.", link1.c_str(), link2.c_str());
             collision_ok = false;
             break;
           }

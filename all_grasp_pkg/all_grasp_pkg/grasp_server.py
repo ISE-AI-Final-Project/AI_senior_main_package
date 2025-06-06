@@ -257,7 +257,7 @@ class AllGraspServer(Node):
                     back_width=60,
                     back_height=60,
                     contact_thickness=5,
-                    gripper_in_offset=10,
+                    gripper_in_offset=0,
                     skeleton_radius=1,
                 )
 
@@ -269,14 +269,43 @@ class AllGraspServer(Node):
                     close=True,
                 )
                 if my_gripper.check_possible(pcd):
-                    possible_gripper.append(my_gripper)
-                    # all_gripper_geometries.extend(my_gripper.geometries())
-                    all_gripper_geometries.extend(my_gripper.get_skeleton(radius=1))
+                    # possible_gripper.append(my_gripper)
+                    # # all_gripper_geometries.extend(my_gripper.geometries())
+                    # all_gripper_geometries.extend(my_gripper.get_skeleton(radius=1))
 
-                    gripper_area_score.append(my_gripper.count_contact_area(pcd))
+                    # gripper_area_score.append(my_gripper.count_contact_area(pcd))
+
+                    # Move it until fail
+                    contact_area_list = []
+                    total_move_distance = 0
+                    MOVE_DISTANCE = 3
+
+                    contact_area_list.append([my_gripper.count_contact_area(pcd), total_move_distance])
+
+                    while True:
+                        # Slightly Movein
+                        my_gripper.move_in(distance=MOVE_DISTANCE)
+                        if not my_gripper.check_possible(pcd):
+                            break
+                        else:
+                            total_move_distance += MOVE_DISTANCE
+
+                            contact_area_list.append([my_gripper.count_contact_area(pcd), total_move_distance])
+
+                    best_move_distance = sorted(contact_area_list, key=lambda x: x[0], reverse=True)[0][1]
+
+                    # Move Out
+                    my_gripper.move_in(distance= -1 * best_move_distance)
+
+                    possible_gripper.append(my_gripper)
+                    all_gripper_geometries.extend(my_gripper.get_skeleton())
+                    gripper_area_score.append(
+                        my_gripper.count_contact_area(pcd)
+                    )
 
                     grip_distance = np.sqrt(np.sum((points[point1_idx] - points[point2_idx]) ** 2))
                     grip_distance_list.append(grip_distance)
+
 
         print("Number of possible Gripper:", len(possible_gripper))
 

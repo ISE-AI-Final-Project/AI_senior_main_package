@@ -4,12 +4,19 @@ import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
+from moveit_msgs.srv import GetPlanningScene
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
-from custom_srv_pkg.srv import CameraIKJointState, IKJointState, IKPassCount
+from custom_srv_pkg.srv import (
+    CameraIKJointState,
+    IKJointState,
+    IKPassCount,
+    JointStateCollisionBool,
+)
 from main_pkg.utils import utils
 
 
@@ -34,6 +41,14 @@ class UR3eIKNode(Node):
             IKPassCount,
             "ik_pass_count",
             self.ik_pass_count_callback,
+        )
+
+        self.client_get_planning_scene = self.create_client(
+            GetPlanningScene, "/get_planning_scene"
+        )
+
+        self.client_joint_state_collision_bool = self.create_client(
+            JointStateCollisionBool, "joint_state_collision_check_bool"
         )
 
         # self.joint_pose_pub = self.create_publisher(PoseArray, "joint_pose_from_ik", 10)
@@ -130,6 +145,8 @@ class UR3eIKNode(Node):
                 best = 9999
 
             nearest_joint_state_list.append(best)
+
+            # self.get_logger().info(f"Start {start}, Target: {target}, Choose: {best}")
 
         if include_gripper:
             return nearest_joint_state_list + list(starting_joint_state[-2:])
@@ -351,11 +368,11 @@ class UR3eIKNode(Node):
                         msg_aim_flip.name = self.joint_names
 
                         # Get nearest joint rotation based on current joint state
-                        nearest_aim_joint_state_by_ik = self.make_nearest_joint_state_rotation(
+                        nearest_aim_joint_state_by_ik_flip = self.make_nearest_joint_state_rotation(
                             starting_joint_state=request.current_joint_state.position,
                             target_joint_state=aim_joint_state_by_ik_flip,
                         )
-                        msg_aim_flip.position = nearest_aim_joint_state_by_ik
+                        msg_aim_flip.position = nearest_aim_joint_state_by_ik_flip
 
                         response.possible_aim_joint_state.append(msg_aim_flip)
                         response.gripper_distance.append(gripper_distance)
@@ -548,7 +565,7 @@ class UR3eIKNode(Node):
         joint_offset_list = [
             (0, 0, 0, 0, np.pi / 12, 0, 0, 0),
             (0, 0, 0, 0, -np.pi / 12, 0, 0, 0),
-            (0, 0, 0, 0, 0, np.pi / 12, 0, 0),
+            # (0, 0, 0, 0, 0, np.pi / 12, 0, 0),
             (0, 0, 0, 0, 0, -np.pi / 12, 0, 0),
         ]
 
@@ -568,7 +585,6 @@ class UR3eIKNode(Node):
     def ik_pass_count_callback(
         self, request: IKPassCount.Request, response: IKPassCount.Response
     ):
-
         response_list = []
 
         for pose in request.pose_array.poses:
@@ -590,6 +606,23 @@ class UR3eIKNode(Node):
 
                 if joint_state_by_ik:
                     total_pass += 1
+                else:
+                    joint_state_by_ik = [
+                        0,
+                        0,
+                        np.pi,  # Collide Joint State
+                        0,
+                        0,
+                        0,
+                        0.025,
+                        0.025,
+                    ]
+
+                msg = JointState()
+                msg.name = self.joint_names
+                msg.position = joint_state_by_ik
+
+                response.joint_state.append(msg)
 
             response_list.append(total_pass)
 
